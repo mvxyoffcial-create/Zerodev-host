@@ -106,32 +106,33 @@ def install_packages(app_id, requirements):
         
         log_to_db(app_id, "INFO", "📦 Installing packages...")
         
-        for req in requirements:
-            req = req.strip()
-            if not req or req.startswith("#"):
-                continue
-            
-            log_to_db(app_id, "INFO", f"Installing {req}...")
-            
-            result = subprocess.run(
-                [sys.executable, "-m", "pip", "install", req],
-                capture_output=True,
-                text=True,
-                timeout=300
-            )
-            
-            if result.returncode != 0:
-                log_to_db(app_id, "ERROR", f"Failed to install {req}")
-                log_to_db(app_id, "ERROR", result.stderr[:500])
-                return False
-            
-            log_to_db(app_id, "INFO", f"✅ Installed {req}")
+        # Install all requirements at once (faster and more reliable)
+        reqs_list = [r.strip() for r in requirements if r.strip() and not r.strip().startswith("#")]
         
-        log_to_db(app_id, "INFO", "✅ All packages installed")
+        if not reqs_list:
+            log_to_db(app_id, "INFO", "No valid requirements")
+            return True
+        
+        log_to_db(app_id, "INFO", f"Installing: {', '.join(reqs_list)}")
+        
+        result = subprocess.run(
+            [sys.executable, "-m", "pip", "install", "--quiet"] + reqs_list,
+            capture_output=True,
+            text=True,
+            timeout=300
+        )
+        
+        if result.returncode != 0:
+            log_to_db(app_id, "ERROR", f"Installation failed")
+            if result.stderr:
+                log_to_db(app_id, "ERROR", result.stderr[:500])
+            return False
+        
+        log_to_db(app_id, "INFO", f"✅ All packages installed successfully")
         return True
         
     except subprocess.TimeoutExpired:
-        log_to_db(app_id, "ERROR", "Package installation timeout")
+        log_to_db(app_id, "ERROR", "⏱️ Installation timeout (>5 minutes)")
         return False
     except Exception as e:
         log_to_db(app_id, "ERROR", f"Installation error: {e}")
@@ -188,16 +189,23 @@ def start_app(app_id):
             return False
         
         if app_id in running_processes and running_processes[app_id].poll() is None:
-            log_to_db(app_id, "WARNING", "Already running")
+            log_to_db(app_id, "WARNING", "⚠️ Already running")
             return True
         
         log_to_db(app_id, "INFO", f"🚀 Starting {app['app_name']}...")
         
-        # Install requirements
-        if app.get("requirements"):
+        # Check if already installed (avoid reinstalling on restart)
+        install_marker = os.path.join(os.getcwd(), "apps", f".{app_id}_installed")
+        
+        if not os.path.exists(install_marker) and app.get("requirements"):
             if not install_packages(app_id, app["requirements"]):
                 apps_col.update_one({"app_id": app_id}, {"$set": {"status": "crashed"}})
                 return False
+            
+            # Mark as installed
+            os.makedirs(os.path.dirname(install_marker), exist_ok=True)
+            with open(install_marker, "w") as f:
+                f.write("installed")
         
         # Save script
         script_path = save_script(app_id, app["script"])
@@ -206,6 +214,8 @@ def start_app(app_id):
         env = os.environ.copy()
         if app.get("env_vars"):
             env.update(app["env_vars"])
+        
+        log_to_db(app_id, "INFO", "▶️ Launching process...")
         
         # Start process
         process = subprocess.Popen(
@@ -230,11 +240,13 @@ def start_app(app_id):
             {"$set": {"status": "running", "pid": process.pid, "last_started": datetime.utcnow()}}
         )
         
-        log_to_db(app_id, "INFO", f"✅ Started (PID: {process.pid})")
+        log_to_db(app_id, "INFO", f"✅ Started successfully (PID: {process.pid})")
+        log_to_db(app_id, "INFO", f"📊 Application is now running!")
         return True
         
     except Exception as e:
-        log_to_db(app_id, "ERROR", f"Start failed: {e}")
+        log_to_db(app_id, "ERROR", f"❌ Start failed: {e}")
+        logger.error(f"Start error: {traceback.format_exc()}")
         apps_col.update_one({"app_id": app_id}, {"$set": {"status": "crashed"}})
         return False
 
