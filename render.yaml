@@ -1,10 +1,12 @@
 services:
   - type: web
-    name: cloudhost-pro
+    name: hosting-platform
     env: python
+    region: oregon
     plan: free
     buildCommand: pip install -r requirements.txt
-    startCommand: gunicorn --worker-class gevent -w 1 --bind 0.0.0.0:$PORT --timeout 120 app:app
+    startCommand: python app.py
+    healthCheckPath: /login
     envVars:
       - key: MONGO_URI
         sync: false
@@ -14,5 +16,5 @@ services:
         sync: false
       - key: SECRET_KEY
         generateValue: true
-      - key: PYTHON_VERSION
-        value: 3.11.0
+      - key: PORT
+        value: 10000
