@@ -457,6 +457,1266 @@ if __name__ == "__main__":
 }
 
 # ============================================================================
+# HTML TEMPLATES
+# ============================================================================
+
+LOGIN_TEMPLATE = '''
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Login - AppHost Pro</title>
+    
+    <link href="https://cdn.replit.com/agent/bootstrap-agent-dark-5.3.2.css" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    
+    <style>
+        body {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+        }
+        
+        .login-card {
+            background: rgba(15, 23, 42, 0.95);
+            border-radius: 20px;
+            padding: 40px;
+            width: 100%;
+            max-width: 400px;
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
+            backdrop-filter: blur(10px);
+        }
+        
+        .logo {
+            text-align: center;
+            margin-bottom: 30px;
+        }
+        
+        .logo-icon {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            width: 80px;
+            height: 80px;
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            margin: 0 auto 20px;
+        }
+        
+        .logo h1 {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+            font-weight: 800;
+            font-size: 2.5rem;
+            margin: 0;
+        }
+        
+        .form-control {
+            background: rgba(30, 41, 59, 0.7);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            color: #f1f5f9;
+            padding: 12px 15px;
+            border-radius: 10px;
+        }
+        
+        .form-control:focus {
+            background: rgba(30, 41, 59, 0.9);
+            border-color: #667eea;
+            box-shadow: 0 0 0 3px rgba(102, 126, 234, 0.1);
+            color: #f1f5f9;
+        }
+        
+        .btn-login {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            border: none;
+            color: white;
+            padding: 12px;
+            border-radius: 10px;
+            font-weight: 600;
+            width: 100%;
+            transition: all 0.3s ease;
+        }
+        
+        .btn-login:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 10px 25px rgba(102, 126, 234, 0.4);
+        }
+        
+        .alert {
+            border-radius: 10px;
+            border: none;
+            background: rgba(239, 68, 68, 0.1);
+            color: #ef4444;
+        }
+    </style>
+</head>
+<body>
+    <div class="login-card">
+        <div class="logo">
+            <div class="logo-icon">
+                <i class="fas fa-rocket fa-2x text-white"></i>
+            </div>
+            <h1>AppHost Pro</h1>
+            <p class="text-muted text-center mt-2">Professional Application Hosting</p>
+        </div>
+        
+        {% if error %}
+        <div class="alert alert-danger" role="alert">
+            <i class="fas fa-exclamation-circle me-2"></i> {{ error }}
+        </div>
+        {% endif %}
+        
+        <form method="POST" action="/login">
+            <div class="mb-3">
+                <label class="form-label">Username</label>
+                <div class="input-group">
+                    <span class="input-group-text">
+                        <i class="fas fa-user"></i>
+                    </span>
+                    <input type="text" class="form-control" name="username" placeholder="admin" required>
+                </div>
+            </div>
+            
+            <div class="mb-4">
+                <label class="form-label">Password</label>
+                <div class="input-group">
+                    <span class="input-group-text">
+                        <i class="fas fa-lock"></i>
+                    </span>
+                    <input type="password" class="form-control" name="password" placeholder="••••••••" required>
+                </div>
+            </div>
+            
+            <button type="submit" class="btn btn-login mb-3">
+                <i class="fas fa-sign-in-alt me-2"></i> Login to Dashboard
+            </button>
+            
+            <div class="text-center mt-4">
+                <small class="text-muted">
+                    <i class="fas fa-shield-alt me-1"></i>
+                    Secure professional hosting platform
+                </small>
+            </div>
+        </form>
+    </div>
+    
+    <script>
+        // Focus on username field
+        document.querySelector('[name="username"]').focus();
+        
+        // Prevent form resubmission on refresh
+        if (window.history.replaceState) {
+            window.history.replaceState(null, null, window.location.href);
+        }
+    </script>
+</body>
+</html>
+'''
+
+BASE_TEMPLATE = '''
+<!DOCTYPE html>
+<html lang="en" data-bs-theme="dark">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AppHost Pro - Professional Application Hosting</title>
+    
+    <!-- Bootstrap 5 CSS -->
+    <link href="https://cdn.replit.com/agent/bootstrap-agent-dark-5.3.2.css" rel="stylesheet">
+    
+    <!-- Font Awesome -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    
+    <!-- Highlight.js for code -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/styles/github-dark.min.css">
+    
+    <style>
+        :root {
+            --primary-gradient: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            --success: #10b981;
+            --danger: #ef4444;
+            --warning: #f59e0b;
+            --info: #3b82f6;
+        }
+        
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+            background-color: #0f172a;
+            color: #f1f5f9;
+            min-height: 100vh;
+        }
+        
+        .navbar {
+            background: rgba(15, 23, 42, 0.95);
+            backdrop-filter: blur(10px);
+            border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+        }
+        
+        .stats-card {
+            background: rgba(30, 41, 59, 0.7);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            border-radius: 16px;
+            transition: all 0.3s ease;
+            padding: 1.5rem;
+        }
+        
+        .stats-card:hover {
+            transform: translateY(-5px);
+            box-shadow: 0 10px 30px rgba(0, 0, 0, 0.3);
+            border-color: var(--info);
+        }
+        
+        .app-card {
+            background: rgba(30, 41, 59, 0.5);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            border-radius: 12px;
+            transition: all 0.2s ease;
+        }
+        
+        .app-card:hover {
+            background: rgba(30, 41, 59, 0.8);
+            border-color: var(--info);
+        }
+        
+        .status-badge {
+            padding: 4px 12px;
+            border-radius: 20px;
+            font-size: 0.85rem;
+            font-weight: 600;
+        }
+        
+        .status-running { background: rgba(16, 185, 129, 0.2); color: #10b981; border: 1px solid rgba(16, 185, 129, 0.3); }
+        .status-stopped { background: rgba(148, 163, 184, 0.2); color: #94a3b8; border: 1px solid rgba(148, 163, 184, 0.3); }
+        .status-crashed { background: rgba(239, 68, 68, 0.2); color: #ef4444; border: 1px solid rgba(239, 68, 68, 0.3); }
+        
+        .btn-gradient {
+            background: var(--primary-gradient);
+            color: white;
+            border: none;
+            padding: 10px 24px;
+            border-radius: 10px;
+            font-weight: 600;
+            transition: all 0.3s ease;
+        }
+        
+        .btn-gradient:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 10px 25px rgba(102, 126, 234, 0.4);
+            color: white;
+        }
+        
+        .log-line {
+            font-family: 'Monaco', 'Menlo', 'Ubuntu Mono', monospace;
+            font-size: 13px;
+            padding: 2px 10px;
+            border-left: 3px solid transparent;
+            margin: 1px 0;
+        }
+        
+        .log-info { border-left-color: var(--info); }
+        .log-error { border-left-color: var(--danger); background: rgba(239, 68, 68, 0.1); }
+        .log-warning { border-left-color: var(--warning); }
+        .log-debug { border-left-color: #94a3b8; color: #94a3b8; }
+        
+        .terminal {
+            background: #0a0a0a;
+            color: #00ff00;
+            font-family: 'Monaco', 'Menlo', monospace;
+            border-radius: 8px;
+            padding: 15px;
+            height: 500px;
+            overflow-y: auto;
+        }
+        
+        .terminal-input {
+            background: transparent;
+            border: none;
+            color: #00ff00;
+            font-family: monospace;
+            width: 100%;
+            outline: none;
+        }
+        
+        .modal-content {
+            background: #1e293b;
+            border: 1px solid rgba(255, 255, 255, 0.1);
+        }
+        
+        .form-control, .form-select {
+            background: rgba(30, 41, 59, 0.7);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            color: #f1f5f9;
+        }
+        
+        .form-control:focus, .form-select:focus {
+            background: rgba(30, 41, 59, 0.9);
+            border-color: var(--info);
+            box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.1);
+            color: #f1f5f9;
+        }
+        
+        .toast {
+            background: rgba(30, 41, 59, 0.95);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            backdrop-filter: blur(10px);
+        }
+        
+        .gradient-text {
+            background: var(--primary-gradient);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+        }
+        
+        .pulse {
+            animation: pulse 2s infinite;
+        }
+        
+        @keyframes pulse {
+            0% { opacity: 1; }
+            50% { opacity: 0.5; }
+            100% { opacity: 1; }
+        }
+        
+        /* Scrollbar styling */
+        ::-webkit-scrollbar {
+            width: 10px;
+            height: 10px;
+        }
+        
+        ::-webkit-scrollbar-track {
+            background: rgba(30, 41, 59, 0.5);
+            border-radius: 5px;
+        }
+        
+        ::-webkit-scrollbar-thumb {
+            background: rgba(102, 126, 234, 0.5);
+            border-radius: 5px;
+        }
+        
+        ::-webkit-scrollbar-thumb:hover {
+            background: rgba(102, 126, 234, 0.8);
+        }
+    </style>
+</head>
+<body>
+    <!-- Navigation -->
+    <nav class="navbar navbar-expand-lg sticky-top">
+        <div class="container-fluid">
+            <a class="navbar-brand d-flex align-items-center" href="/">
+                <div class="bg-gradient rounded-circle d-flex align-items-center justify-content-center me-2" style="width: 32px; height: 32px; background: var(--primary-gradient);">
+                    <i class="fas fa-rocket text-white"></i>
+                </div>
+                <span class="fw-bold gradient-text">AppHost Pro</span>
+            </a>
+            
+            <button class="navbar-toggler border-0" type="button" data-bs-toggle="collapse" data-bs-target="#navbarNav">
+                <i class="fas fa-bars"></i>
+            </button>
+            
+            <div class="collapse navbar-collapse" id="navbarNav">
+                <ul class="navbar-nav me-auto">
+                    <li class="nav-item">
+                        <a class="nav-link active" href="/">
+                            <i class="fas fa-home me-1"></i> Dashboard
+                        </a>
+                    </li>
+                    <li class="nav-item">
+                        <a class="nav-link" href="#" data-bs-toggle="modal" data-bs-target="#createAppModal">
+                            <i class="fas fa-plus-circle me-1"></i> New App
+                        </a>
+                    </li>
+                    <li class="nav-item">
+                        <a class="nav-link" href="#">
+                            <i class="fas fa-chart-line me-1"></i> Analytics
+                        </a>
+                    </li>
+                    <li class="nav-item">
+                        <a class="nav-link" href="#">
+                            <i class="fas fa-cog me-1"></i> Settings
+                        </a>
+                    </li>
+                </ul>
+                
+                <div class="d-flex align-items-center">
+                    <div class="me-3">
+                        <small class="text-muted">System: 0% CPU</small>
+                    </div>
+                    <div class="dropdown">
+                        <button class="btn btn-outline-light btn-sm dropdown-toggle" type="button" data-bs-toggle="dropdown">
+                            <i class="fas fa-user me-1"></i> {{ session.username }}
+                        </button>
+                        <ul class="dropdown-menu">
+                            <li><a class="dropdown-item" href="#"><i class="fas fa-user-cog me-2"></i> Profile</a></li>
+                            <li><hr class="dropdown-divider"></li>
+                            <li><a class="dropdown-item text-danger" href="/logout"><i class="fas fa-sign-out-alt me-2"></i> Logout</a></li>
+                        </ul>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </nav>
+    
+    <!-- Main Content -->
+    <div class="container-fluid py-4">
+        {% block content %}{% endblock %}
+    </div>
+    
+    <!-- Create App Modal -->
+    <div class="modal fade" id="createAppModal" tabindex="-1">
+        <div class="modal-dialog modal-lg">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h5 class="modal-title gradient-text"><i class="fas fa-rocket me-2"></i> Deploy New Application</h5>
+                    <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+                </div>
+                <div class="modal-body">
+                    <form id="createAppForm">
+                        <div class="mb-3">
+                            <label class="form-label">Application Name</label>
+                            <input type="text" class="form-control" name="name" placeholder="my-telegram-bot" required>
+                            <div class="form-text">Use lowercase letters, numbers, and hyphens only</div>
+                        </div>
+                        
+                        <div class="mb-3">
+                            <label class="form-label">Application Type</label>
+                            <select class="form-select" name="type" id="appTypeSelect" required>
+                                <option value="">Select a template...</option>
+                                <option value="telegram_bot_ptb">🤖 Telegram Bot (python-telegram-bot)</option>
+                                <option value="flask_api">🌐 Flask API</option>
+                                <option value="fastapi">⚡ FastAPI</option>
+                                <option value="discord_bot">🎮 Discord Bot</option>
+                                <option value="background_worker">👷 Background Worker</option>
+                                <option value="custom">🛠 Custom Application</option>
+                            </select>
+                        </div>
+                        
+                        <div class="mb-3">
+                            <label class="form-label">Python Code</label>
+                            <textarea class="form-control font-monospace" name="script" rows="15" id="codeEditor" style="font-size: 13px;"></textarea>
+                            <div class="form-text">Write your application code here</div>
+                        </div>
+                        
+                        <div class="mb-3">
+                            <label class="form-label">Requirements</label>
+                            <textarea class="form-control font-monospace" name="requirements" rows="3" placeholder="flask==3.0.0
+requests==2.31.0
+python-telegram-bot==20.3"></textarea>
+                            <div class="form-text">One package per line (pip install format)</div>
+                        </div>
+                        
+                        <div class="mb-3">
+                            <label class="form-label">Environment Variables</label>
+                            <div id="envVarsContainer">
+                                <div class="row g-2 mb-2">
+                                    <div class="col-md-5">
+                                        <input type="text" class="form-control" placeholder="KEY" name="env_keys[]">
+                                    </div>
+                                    <div class="col-md-5">
+                                        <input type="text" class="form-control" placeholder="VALUE" name="env_values[]">
+                                    </div>
+                                    <div class="col-md-2">
+                                        <button type="button" class="btn btn-outline-danger w-100" onclick="removeEnvVar(this)">
+                                            <i class="fas fa-trash"></i>
+                                        </button>
+                                    </div>
+                                </div>
+                            </div>
+                            <button type="button" class="btn btn-outline-info btn-sm mt-2" onclick="addEnvVar()">
+                                <i class="fas fa-plus me-1"></i> Add Variable
+                            </button>
+                        </div>
+                        
+                        <div class="row">
+                            <div class="col-md-6">
+                                <div class="form-check">
+                                    <input class="form-check-input" type="checkbox" name="auto_start" id="autoStart" checked>
+                                    <label class="form-check-label" for="autoStart">
+                                        Auto-start on deployment
+                                    </label>
+                                </div>
+                            </div>
+                            <div class="col-md-6">
+                                <div class="form-check">
+                                    <input class="form-check-input" type="checkbox" name="auto_restart" id="autoRestart" checked>
+                                    <label class="form-check-label" for="autoRestart">
+                                        Auto-restart on crash
+                                    </label>
+                                </div>
+                            </div>
+                        </div>
+                    </form>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+                    <button type="button" class="btn btn-gradient" onclick="createApplication()">
+                        <i class="fas fa-rocket me-1"></i> Deploy Application
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+    
+    <!-- Toast Container -->
+    <div class="toast-container position-fixed bottom-0 end-0 p-3">
+        <div id="toastTemplate" class="toast" role="alert">
+            <div class="toast-header">
+                <strong class="me-auto toast-title">Notification</strong>
+                <button type="button" class="btn-close btn-close-white" data-bs-dismiss="toast"></button>
+            </div>
+            <div class="toast-body toast-message">
+                Message goes here
+            </div>
+        </div>
+    </div>
+    
+    <!-- JavaScript Libraries -->
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/js/bootstrap.bundle.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/highlight.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/axios@1.6.0/dist/axios.min.js"></script>
+    
+    <script>
+        // Initialize Highlight.js
+        if (typeof hljs !== 'undefined') {
+            hljs.highlightAll();
+        }
+        
+        // Toast system
+        function showToast(title, message, type = 'info') {
+            const toastEl = document.getElementById('toastTemplate').cloneNode(true);
+            toastEl.id = '';
+            toastEl.querySelector('.toast-title').textContent = title;
+            toastEl.querySelector('.toast-message').textContent = message;
+            
+            // Set color based on type
+            if (type === 'success') {
+                toastEl.querySelector('.toast-header').style.borderLeft = '4px solid #10b981';
+            } else if (type === 'error') {
+                toastEl.querySelector('.toast-header').style.borderLeft = '4px solid #ef4444';
+            } else if (type === 'warning') {
+                toastEl.querySelector('.toast-header').style.borderLeft = '4px solid #f59e0b';
+            }
+            
+            document.querySelector('.toast-container').appendChild(toastEl);
+            const toast = new bootstrap.Toast(toastEl);
+            toast.show();
+            
+            // Remove after hide
+            toastEl.addEventListener('hidden.bs.toast', function () {
+                toastEl.remove();
+            });
+        }
+        
+        // Environment variables management
+        function addEnvVar() {
+            const container = document.getElementById('envVarsContainer');
+            const div = document.createElement('div');
+            div.className = 'row g-2 mb-2';
+            div.innerHTML = `
+                <div class="col-md-5">
+                    <input type="text" class="form-control" placeholder="KEY" name="env_keys[]">
+                </div>
+                <div class="col-md-5">
+                    <input type="text" class="form-control" placeholder="VALUE" name="env_values[]">
+                </div>
+                <div class="col-md-2">
+                    <button type="button" class="btn btn-outline-danger w-100" onclick="removeEnvVar(this)">
+                        <i class="fas fa-trash"></i>
+                    </button>
+                </div>
+            `;
+            container.appendChild(div);
+        }
+        
+        function removeEnvVar(button) {
+            button.closest('.row').remove();
+        }
+        
+        // Template selection
+        document.getElementById('appTypeSelect')?.addEventListener('change', function() {
+            const template = this.value;
+            if (template && window.appTemplates && window.appTemplates[template]) {
+                document.querySelector('[name="script"]').value = window.appTemplates[template].script;
+                document.querySelector('[name="requirements"]').value = window.appTemplates[template].requirements.join('\\n');
+                
+                // Add template-specific env vars
+                if (template.includes('telegram')) {
+                    addTemplateEnvVar('BOT_TOKEN', 'your-telegram-bot-token-here');
+                } else if (template.includes('discord')) {
+                    addTemplateEnvVar('DISCORD_TOKEN', 'your-discord-bot-token-here');
+                }
+            }
+        });
+        
+        function addTemplateEnvVar(key, value) {
+            const container = document.getElementById('envVarsContainer');
+            // Clear existing
+            container.innerHTML = '';
+            
+            const div = document.createElement('div');
+            div.className = 'row g-2 mb-2';
+            div.innerHTML = `
+                <div class="col-md-5">
+                    <input type="text" class="form-control" placeholder="KEY" name="env_keys[]" value="${key}">
+                </div>
+                <div class="col-md-5">
+                    <input type="text" class="form-control" placeholder="VALUE" name="env_values[]" value="${value}">
+                </div>
+                <div class="col-md-2">
+                    <button type="button" class="btn btn-outline-danger w-100" onclick="removeEnvVar(this)">
+                        <i class="fas fa-trash"></i>
+                    </button>
+                </div>
+            `;
+            container.appendChild(div);
+        }
+        
+        // Create application
+        function createApplication() {
+            const form = document.getElementById('createAppForm');
+            const formData = new FormData(form);
+            
+            // Build env vars object
+            const envKeys = formData.getAll('env_keys[]');
+            const envValues = formData.getAll('env_values[]');
+            const envVars = {};
+            
+            for (let i = 0; i < envKeys.length; i++) {
+                if (envKeys[i] && envValues[i]) {
+                    envVars[envKeys[i]] = envValues[i];
+                }
+            }
+            
+            // Build requirements array
+            const requirementsText = formData.get('requirements') || '';
+            const requirements = requirementsText.split('\\n')
+                .map(line => line.trim())
+                .filter(line => line && !line.startsWith('#'));
+            
+            const data = {
+                name: formData.get('name'),
+                type: formData.get('type'),
+                script: formData.get('script'),
+                requirements: requirements,
+                env_vars: envVars,
+                auto_start: formData.get('auto_start') === 'on',
+                auto_restart: formData.get('auto_restart') === 'on'
+            };
+            
+            axios.post('/api/apps/create', data)
+                .then(response => {
+                    showToast('Success', 'Application created successfully!', 'success');
+                    setTimeout(() => window.location.reload(), 1500);
+                })
+                .catch(error => {
+                    showToast('Error', error.response?.data?.error || 'Failed to create application', 'error');
+                });
+        }
+        
+        // Application actions
+        function startApp(appId) {
+            axios.post(`/api/apps/${appId}/start`)
+                .then(() => {
+                    showToast('Success', 'Application started', 'success');
+                    setTimeout(() => window.location.reload(), 1000);
+                })
+                .catch(error => {
+                    showToast('Error', error.response?.data?.error || 'Failed to start', 'error');
+                });
+        }
+        
+        function stopApp(appId) {
+            if (!confirm('Are you sure you want to stop this application?')) return;
+            
+            axios.post(`/api/apps/${appId}/stop`)
+                .then(() => {
+                    showToast('Success', 'Application stopped', 'success');
+                    setTimeout(() => window.location.reload(), 1000);
+                })
+                .catch(error => {
+                    showToast('Error', error.response?.data?.error || 'Failed to stop', 'error');
+                });
+        }
+        
+        function restartApp(appId) {
+            axios.post(`/api/apps/${appId}/restart`)
+                .then(() => {
+                    showToast('Success', 'Application restarting...', 'success');
+                    setTimeout(() => window.location.reload(), 1500);
+                })
+                .catch(error => {
+                    showToast('Error', error.response?.data?.error || 'Failed to restart', 'error');
+                });
+        }
+        
+        function deleteApp(appId) {
+            if (!confirm('Are you sure you want to delete this application? This cannot be undone!')) return;
+            
+            axios.delete(`/api/apps/${appId}`)
+                .then(() => {
+                    showToast('Success', 'Application deleted', 'success');
+                    setTimeout(() => window.location.reload(), 1000);
+                })
+                .catch(error => {
+                    showToast('Error', error.response?.data?.error || 'Failed to delete', 'error');
+                });
+        }
+        
+        // Load templates if available
+        if (typeof window.appTemplates === 'undefined') {
+            window.appTemplates = {{ templates|tojson|safe if templates else '{}' }};
+        }
+    </script>
+    
+    {% block scripts %}{% endblock %}
+</body>
+</html>
+'''
+
+DASHBOARD_TEMPLATE = '''
+{% extends "base.html" %}
+
+{% block content %}
+<div class="row mb-4">
+    <div class="col-12">
+        <h1 class="gradient-text">Application Dashboard</h1>
+        <p class="text-muted">Deploy and manage Python applications 24/7</p>
+    </div>
+</div>
+
+<!-- Stats Cards -->
+<div class="row mb-4">
+    <div class="col-md-3">
+        <div class="stats-card">
+            <div class="d-flex justify-content-between align-items-center">
+                <div>
+                    <h6 class="text-muted mb-1">Total Apps</h6>
+                    <h3 class="mb-0">{{ stats.total_apps|default(0) }}</h3>
+                </div>
+                <div class="bg-gradient rounded-circle d-flex align-items-center justify-content-center" 
+                     style="width: 48px; height: 48px; background: var(--primary-gradient);">
+                    <i class="fas fa-layer-group text-white"></i>
+                </div>
+            </div>
+        </div>
+    </div>
+    
+    <div class="col-md-3">
+        <div class="stats-card">
+            <div class="d-flex justify-content-between align-items-center">
+                <div>
+                    <h6 class="text-muted mb-1">Running</h6>
+                    <h3 class="mb-0 text-success">{{ stats.running_apps|default(0) }}</h3>
+                </div>
+                <div class="bg-success rounded-circle d-flex align-items-center justify-content-center" 
+                     style="width: 48px; height: 48px; background: rgba(16, 185, 129, 0.2);">
+                    <i class="fas fa-play text-success"></i>
+                </div>
+            </div>
+        </div>
+    </div>
+    
+    <div class="col-md-3">
+        <div class="stats-card">
+            <div class="d-flex justify-content-between align-items-center">
+                <div>
+                    <h6 class="text-muted mb-1">System CPU</h6>
+                    <h3 class="mb-0">{{ stats.cpu_percent|default(0)|round(1) }}%</h3>
+                </div>
+                <div class="bg-info rounded-circle d-flex align-items-center justify-content-center" 
+                     style="width: 48px; height: 48px; background: rgba(59, 130, 246, 0.2);">
+                    <i class="fas fa-microchip text-info"></i>
+                </div>
+            </div>
+        </div>
+    </div>
+    
+    <div class="col-md-3">
+        <div class="stats-card">
+            <div class="d-flex justify-content-between align-items-center">
+                <div>
+                    <h6 class="text-muted mb-1">Platform Uptime</h6>
+                    <h3 class="mb-0">{{ (stats.platform_uptime|default(0) // 3600)|int }}h</h3>
+                </div>
+                <div class="bg-warning rounded-circle d-flex align-items-center justify-content-center" 
+                     style="width: 48px; height: 48px; background: rgba(245, 158, 11, 0.2);">
+                    <i class="fas fa-clock text-warning"></i>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Applications Table -->
+<div class="row">
+    <div class="col-12">
+        <div class="card">
+            <div class="card-header d-flex justify-content-between align-items-center">
+                <h5 class="mb-0">Applications</h5>
+                <button class="btn btn-gradient btn-sm" data-bs-toggle="modal" data-bs-target="#createAppModal">
+                    <i class="fas fa-plus me-1"></i> New Application
+                </button>
+            </div>
+            <div class="card-body">
+                {% if applications %}
+                <div class="table-responsive">
+                    <table class="table table-hover">
+                        <thead>
+                            <tr>
+                                <th>Name</th>
+                                <th>Type</th>
+                                <th>Status</th>
+                                <th>Uptime</th>
+                                <th>Created</th>
+                                <th>Actions</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {% for app in applications %}
+                            <tr>
+                                <td>
+                                    <div class="d-flex align-items-center">
+                                        <div class="me-2">
+                                            {% if app.type == 'telegram_bot_ptb' %}
+                                            <i class="fab fa-telegram text-info"></i>
+                                            {% elif app.type == 'flask_api' %}
+                                            <i class="fas fa-globe text-success"></i>
+                                            {% elif app.type == 'fastapi' %}
+                                            <i class="fas fa-bolt text-warning"></i>
+                                            {% elif app.type == 'discord_bot' %}
+                                            <i class="fab fa-discord text-primary"></i>
+                                            {% elif app.type == 'background_worker' %}
+                                            <i class="fas fa-cogs text-secondary"></i>
+                                            {% else %}
+                                            <i class="fas fa-code text-muted"></i>
+                                            {% endif %}
+                                        </div>
+                                        <div>
+                                            <strong>{{ app.name }}</strong><br>
+                                            <small class="text-muted">{{ app.app_id }}</small>
+                                        </div>
+                                    </div>
+                                </td>
+                                <td>
+                                    <span class="badge bg-dark">{{ app.type_name }}</span>
+                                </td>
+                                <td>
+                                    {% if app.status == 'running' %}
+                                    <span class="status-badge status-running">
+                                        <i class="fas fa-circle pulse me-1"></i> Running
+                                    </span>
+                                    {% elif app.status == 'stopped' %}
+                                    <span class="status-badge status-stopped">
+                                        <i class="fas fa-circle me-1"></i> Stopped
+                                    </span>
+                                    {% elif app.status == 'crashed' %}
+                                    <span class="status-badge status-crashed">
+                                        <i class="fas fa-exclamation-circle me-1"></i> Crashed
+                                    </span>
+                                    {% else %}
+                                    <span class="status-badge status-stopped">
+                                        <i class="fas fa-question-circle me-1"></i> Unknown
+                                    </span>
+                                    {% endif %}
+                                </td>
+                                <td>
+                                    {% if app.uptime_seconds %}
+                                    {% set hours = (app.uptime_seconds // 3600)|int %}
+                                    {% set minutes = ((app.uptime_seconds % 3600) // 60)|int %}
+                                    {{ hours }}h {{ minutes }}m
+                                    {% else %}
+                                    -
+                                    {% endif %}
+                                </td>
+                                <td>
+                                    <small>{{ app.created_at.strftime('%Y-%m-%d') if app.created_at else 'Unknown' }}</small>
+                                </td>
+                                <td>
+                                    <div class="btn-group btn-group-sm">
+                                        {% if app.status == 'running' %}
+                                        <button class="btn btn-outline-danger" title="Stop" onclick="stopApp('{{ app.app_id }}')">
+                                            <i class="fas fa-stop"></i>
+                                        </button>
+                                        <button class="btn btn-outline-warning" title="Restart" onclick="restartApp('{{ app.app_id }}')">
+                                            <i class="fas fa-redo"></i>
+                                        </button>
+                                        {% else %}
+                                        <button class="btn btn-outline-success" title="Start" onclick="startApp('{{ app.app_id }}')">
+                                            <i class="fas fa-play"></i>
+                                        </button>
+                                        {% endif %}
+                                        
+                                        <a href="/apps/{{ app.app_id }}/logs" class="btn btn-outline-info" title="Logs">
+                                            <i class="fas fa-terminal"></i>
+                                        </a>
+                                        
+                                        <button class="btn btn-outline-danger" title="Delete" onclick="deleteApp('{{ app.app_id }}')">
+                                            <i class="fas fa-trash"></i>
+                                        </button>
+                                    </div>
+                                </td>
+                            </tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                </div>
+                {% else %}
+                <div class="text-center py-5">
+                    <div class="mb-3">
+                        <i class="fas fa-rocket fa-4x text-muted"></i>
+                    </div>
+                    <h4 class="text-muted">No applications yet</h4>
+                    <p class="text-muted">Deploy your first application to get started</p>
+                    <button class="btn btn-gradient" data-bs-toggle="modal" data-bs-target="#createAppModal">
+                        <i class="fas fa-plus me-1"></i> Create Your First App
+                    </button>
+                </div>
+                {% endif %}
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- System Info -->
+<div class="row mt-4">
+    <div class="col-md-6">
+        <div class="card">
+            <div class="card-header">
+                <h6 class="mb-0"><i class="fas fa-server me-2"></i> System Resources</h6>
+            </div>
+            <div class="card-body">
+                <div class="row">
+                    <div class="col-6">
+                        <small class="text-muted">CPU Usage</small>
+                        <div class="progress mt-1" style="height: 8px;">
+                            <div class="progress-bar bg-info" style="width: {{ stats.cpu_percent|default(0) }}%"></div>
+                        </div>
+                        <small>{{ stats.cpu_percent|default(0)|round(1) }}%</small>
+                    </div>
+                    <div class="col-6">
+                        <small class="text-muted">Memory</small>
+                        <div class="progress mt-1" style="height: 8px;">
+                            <div class="progress-bar bg-success" style="width: {{ stats.memory_percent|default(0) }}%"></div>
+                        </div>
+                        <small>{{ stats.memory_used_gb|default(0)|round(1) }}GB / {{ stats.memory_total_gb|default(1)|round(1) }}GB</small>
+                    </div>
+                </div>
+                
+                <div class="row mt-3">
+                    <div class="col-6">
+                        <small class="text-muted">Disk Usage</small>
+                        <div class="progress mt-1" style="height: 8px;">
+                            <div class="progress-bar bg-warning" style="width: {{ stats.disk_percent|default(0) }}%"></div>
+                        </div>
+                        <small>{{ stats.disk_used_gb|default(0)|round(1) }}GB / {{ stats.disk_total_gb|default(1)|round(1) }}GB</small>
+                    </div>
+                    <div class="col-6">
+                        <small class="text-muted">Running Processes</small>
+                        <h5 class="mt-1">{{ stats.running_apps|default(0) }}</h5>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+    
+    <div class="col-md-6">
+        <div class="card">
+            <div class="card-header">
+                <h6 class="mb-0"><i class="fas fa-bolt me-2"></i> Quick Actions</h6>
+            </div>
+            <div class="card-body">
+                <div class="row g-2">
+                    <div class="col-md-6">
+                        <button class="btn btn-outline-info w-100" data-bs-toggle="modal" data-bs-target="#createAppModal">
+                            <i class="fas fa-plus me-1"></i> New App
+                        </button>
+                    </div>
+                    <div class="col-md-6">
+                        <button class="btn btn-outline-success w-100" onclick="window.location.reload()">
+                            <i class="fas fa-sync-alt me-1"></i> Refresh
+                        </button>
+                    </div>
+                    <div class="col-md-6">
+                        <a href="#" class="btn btn-outline-warning w-100">
+                            <i class="fas fa-terminal me-1"></i> System Logs
+                        </a>
+                    </div>
+                    <div class="col-md-6">
+                        <a href="#" class="btn btn-outline-primary w-100">
+                            <i class="fas fa-download me-1"></i> Export Data
+                        </a>
+                    </div>
+                </div>
+                
+                <hr>
+                
+                <div>
+                    <small class="text-muted">Platform Status</small>
+                    <div class="d-flex justify-content-between mt-1">
+                        <span>Uptime</span>
+                        <span>{{ (stats.platform_uptime|default(0) // 3600)|int }}h {{ ((stats.platform_uptime|default(0) % 3600) // 60)|int }}m</span>
+                    </div>
+                    <div class="d-flex justify-content-between">
+                        <span>Apps Managed</span>
+                        <span>{{ stats.total_apps|default(0) }}</span>
+                    </div>
+                    <div class="d-flex justify-content-between">
+                        <span>Version</span>
+                        <span>1.0.0</span>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+'''
+
+LOGS_TEMPLATE = '''
+{% extends "base.html" %}
+
+{% block content %}
+<div class="row mb-4">
+    <div class="col-12">
+        <div class="d-flex justify-content-between align-items-center">
+            <div>
+                <h1 class="gradient-text">
+                    <i class="fas fa-terminal me-2"></i> Logs: {{ app.name }}
+                </h1>
+                <p class="text-muted">Real-time logs for {{ app.app_id }}</p>
+            </div>
+            <div>
+                <a href="/" class="btn btn-outline-secondary me-2">
+                    <i class="fas fa-arrow-left me-1"></i> Back
+                </a>
+                <button class="btn btn-outline-danger me-2" onclick="clearLogs('{{ app.app_id }}')">
+                    <i class="fas fa-trash me-1"></i> Clear
+                </button>
+                <button class="btn btn-gradient" onclick="downloadLogs('{{ app.app_id }}')">
+                    <i class="fas fa-download me-1"></i> Download
+                </button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<div class="row">
+    <div class="col-12">
+        <div class="card">
+            <div class="card-header">
+                <div class="d-flex justify-content-between align-items-center">
+                    <div>
+                        <span class="badge bg-dark me-2">{{ app.type_name }}</span>
+                        {% if app.status == 'running' %}
+                        <span class="badge bg-success">
+                            <i class="fas fa-circle pulse me-1"></i> Running
+                        </span>
+                        {% else %}
+                        <span class="badge bg-secondary">
+                            <i class="fas fa-circle me-1"></i> {{ app.status|title }}
+                        </span>
+                        {% endif %}
+                    </div>
+                    <div class="form-check form-switch">
+                        <input class="form-check-input" type="checkbox" id="autoScroll" checked>
+                        <label class="form-check-label" for="autoScroll">Auto-scroll</label>
+                    </div>
+                </div>
+            </div>
+            <div class="card-body p-0">
+                <div id="logContainer" style="height: 600px; overflow-y: auto; background: #0a0a0a;">
+                    <div id="logs" class="p-3">
+                        <div class="text-center text-muted py-5">
+                            <i class="fas fa-spinner fa-spin fa-2x mb-3"></i>
+                            <p>Connecting to log stream...</p>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            <div class="card-footer">
+                <div class="row">
+                    <div class="col-md-3">
+                        <div class="input-group input-group-sm">
+                            <span class="input-group-text">Filter</span>
+                            <select class="form-select" id="logLevelFilter">
+                                <option value="all">All Levels</option>
+                                <option value="INFO">INFO</option>
+                                <option value="ERROR">ERROR</option>
+                                <option value="WARNING">WARNING</option>
+                            </select>
+                        </div>
+                    </div>
+                    <div class="col-md-6">
+                        <div class="input-group input-group-sm">
+                            <span class="input-group-text"><i class="fas fa-search"></i></span>
+                            <input type="text" class="form-control" id="logSearch" placeholder="Search logs...">
+                        </div>
+                    </div>
+                    <div class="col-md-3">
+                        <div class="d-flex justify-content-end">
+                            <button class="btn btn-outline-secondary btn-sm me-2" onclick="loadMoreLogs()">
+                                <i class="fas fa-history me-1"></i> Load More
+                            </button>
+                            <button class="btn btn-outline-info btn-sm" onclick="copyLogs()">
+                                <i class="fas fa-copy me-1"></i> Copy
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script>
+    let logOffset = 0;
+    const logContainer = document.getElementById('logContainer');
+    const logsDiv = document.getElementById('logs');
+    let eventSource = null;
+    
+    // Connect to SSE log stream
+    function connectLogStream() {
+        if (eventSource) eventSource.close();
+        
+        eventSource = new EventSource(`/api/apps/{{ app.app_id }}/logs/stream`);
+        
+        eventSource.onmessage = function(event) {
+            const log = JSON.parse(event.data);
+            addLogLine(log);
+        };
+        
+        eventSource.onerror = function() {
+            console.error('Log stream disconnected');
+            setTimeout(connectLogStream, 3000);
+        };
+    }
+    
+    // Add log line to display
+    function addLogLine(log) {
+        const time = new Date(log.timestamp).toLocaleTimeString();
+        const level = log.level || 'INFO';
+        const message = log.message;
+        
+        const logLine = document.createElement('div');
+        logLine.className = `log-line log-${level.toLowerCase()}`;
+        logLine.innerHTML = `
+            <span class="text-muted">[${time}]</span>
+            <span class="badge bg-dark ms-2">${level}</span>
+            <span class="ms-2">${escapeHtml(message)}</span>
+        `;
+        
+        logsDiv.appendChild(logLine);
+        
+        // Auto-scroll if enabled
+        if (document.getElementById('autoScroll').checked) {
+            logContainer.scrollTop = logContainer.scrollHeight;
+        }
+    }
+    
+    // Load historical logs
+    function loadHistoricalLogs() {
+        axios.get(`/api/apps/{{ app.app_id }}/logs?offset=${logOffset}&limit=100`)
+            .then(response => {
+                const logs = response.data.logs || [];
+                logs.reverse().forEach(log => {
+                    addLogLine(log);
+                });
+                logOffset += logs.length;
+                
+                if (logs.length > 0) {
+                    logContainer.scrollTop = logContainer.scrollHeight;
+                }
+            });
+    }
+    
+    // Load more logs
+    function loadMoreLogs() {
+        loadHistoricalLogs();
+    }
+    
+    // Clear logs
+    function clearLogs(appId) {
+        if (!confirm('Clear all logs for this application?')) return;
+        
+        axios.delete(`/api/apps/${appId}/logs`)
+            .then(() => {
+                logsDiv.innerHTML = '';
+                showToast('Success', 'Logs cleared', 'success');
+            })
+            .catch(error => {
+                showToast('Error', error.response?.data?.error || 'Failed to clear logs', 'error');
+            });
+    }
+    
+    // Download logs
+    function downloadLogs(appId) {
+        window.open(`/api/apps/${appId}/logs/download`, '_blank');
+    }
+    
+    // Copy logs to clipboard
+    function copyLogs() {
+        const logText = Array.from(logsDiv.children)
+            .map(line => line.textContent)
+            .join('\\n');
+        
+        navigator.clipboard.writeText(logText)
+            .then(() => showToast('Success', 'Logs copied to clipboard', 'success'))
+            .catch(() => showToast('Error', 'Failed to copy logs', 'error'));
+    }
+    
+    // Escape HTML for safety
+    function escapeHtml(text) {
+        const div = document.createElement('div');
+        div.textContent = text;
+        return div.innerHTML;
+    }
+    
+    // Filter logs
+    document.getElementById('logLevelFilter').addEventListener('change', function() {
+        const level = this.value;
+        const lines = logsDiv.children;
+        
+        for (let line of lines) {
+            if (level === 'all' || line.textContent.includes(`[${level}]`)) {
+                line.style.display = '';
+            } else {
+                line.style.display = 'none';
+            }
+        }
+    });
+    
+    // Search logs
+    document.getElementById('logSearch').addEventListener('input', function() {
+        const search = this.value.toLowerCase();
+        const lines = logsDiv.children;
+        
+        for (let line of lines) {
+            if (line.textContent.toLowerCase().includes(search)) {
+                line.style.display = '';
+                line.style.backgroundColor = search ? 'rgba(59, 130, 246, 0.1)' : '';
+            } else {
+                line.style.display = 'none';
+            }
+        }
+    });
+    
+    // Initialize
+    document.addEventListener('DOMContentLoaded', function() {
+        loadHistoricalLogs();
+        connectLogStream();
+    });
+</script>
+{% endblock %}
+'''
+
+# ============================================================================
 # HELPER FUNCTIONS
 # ============================================================================
 
@@ -568,7 +1828,18 @@ def get_system_stats() -> Dict[str, Any]:
         }
     except Exception as e:
         log_system(f"Error getting system stats: {e}", "ERROR")
-        return {}
+        return {
+            'cpu_percent': 0,
+            'memory_percent': 0,
+            'memory_used_gb': 0,
+            'memory_total_gb': 0,
+            'disk_percent': 0,
+            'disk_used_gb': 0,
+            'disk_total_gb': 0,
+            'running_apps': 0,
+            'total_apps': len(app_metadata),
+            'platform_uptime': int(time.time() - platform_start_time)
+        }
 
 def requires_auth(f):
     """Decorator for authentication"""
@@ -602,91 +1873,6 @@ def rate_limit(key: str, limit: int, period: int = 60):
             return f(*args, **kwargs)
         return decorated
     return decorator
-
-# ============================================================================
-# LOG CAPTURE THREAD CLASS
-# ============================================================================
-
-class LogCaptureThread(threading.Thread):
-    """Thread to capture stdout/stderr from subprocess"""
-    
-    def __init__(self, app_id: str, process: subprocess.Popen):
-        super().__init__(daemon=True)
-        self.app_id = app_id
-        self.process = process
-        self.running = True
-        self.queue = log_queues.get(app_id, Queue(maxsize=Config.LOG_BUFFER_SIZE))
-        
-    def run(self):
-        """Monitor process output and capture logs"""
-        stdout = self.process.stdout
-        stderr = self.process.stderr
-        
-        # Set file descriptors to non-blocking
-        import fcntl
-        for pipe in [stdout, stderr]:
-            if pipe:
-                fd = pipe.fileno()
-                fl = fcntl.fcntl(fd, fcntl.F_GETFL)
-                fcntl.fcntl(fd, fcntl.F_SETFL, fl | os.O_NONBLOCK)
-        
-        while self.running and self.process.poll() is None:
-            try:
-                # Read stdout
-                if stdout:
-                    try:
-                        line = stdout.readline()
-                        if line:
-                            self._process_line(line.strip(), 'INFO')
-                    except:
-                        pass
-                
-                # Read stderr
-                if stderr:
-                    try:
-                        line = stderr.readline()
-                        if line:
-                            self._process_line(line.strip(), 'ERROR')
-                    except:
-                        pass
-                
-                time.sleep(0.1)
-                
-            except Exception as e:
-                log_system(f"Log capture error for {self.app_id}: {e}", "ERROR")
-                time.sleep(1)
-        
-        log_system(f"Log capture stopped for {self.app_id}", "INFO")
-    
-    def _process_line(self, line: str, level: str):
-        """Process and store log line"""
-        if not line:
-            return
-        
-        timestamp = datetime.now()
-        log_entry = {
-            'app_id': self.app_id,
-            'timestamp': timestamp,
-            'level': level,
-            'message': line
-        }
-        
-        # Store in MongoDB
-        if mongo_available and logs_collection is not None:
-            try:
-                logs_collection.insert_one(log_entry)
-            except Exception as e:
-                log_system(f"Failed to store log in MongoDB: {e}", "ERROR")
-        
-        # Add to real-time queue
-        try:
-            self.queue.put_nowait(log_entry)
-        except:
-            pass  # Queue is full
-    
-    def stop(self):
-        """Stop the log capture thread"""
-        self.running = False
 
 # ============================================================================
 # PROCESS MANAGEMENT FUNCTIONS
@@ -734,10 +1920,6 @@ def start_application(app_id: str) -> tuple[bool, str]:
         
         # Store process
         running_apps[app_id] = process
-        
-        # Start log capture thread
-        log_thread = LogCaptureThread(app_id, process)
-        log_thread.start()
         
         # Update metadata
         app_data['status'] = 'running'
@@ -877,59 +2059,6 @@ def check_application_health(app_id: str) -> Dict[str, Any]:
     return status
 
 # ============================================================================
-# MONITORING THREAD
-# ============================================================================
-
-def monitoring_worker():
-    """Background thread to monitor application health"""
-    log_system("Monitoring thread started", "INFO")
-    
-    while monitor_running:
-        try:
-            # Check each running application
-            for app_id, process in list(running_apps.items()):
-                if process.poll() is not None:  # Process died
-                    log_system(f"Application {app_id} crashed with exit code {process.returncode}", "ERROR")
-                    
-                    # Update status
-                    app_data = app_metadata.get(app_id)
-                    if app_data:
-                        app_data['status'] = 'crashed'
-                        app_data['pid'] = None
-                        
-                        # Auto-restart if enabled
-                        if app_data.get('auto_restart', False):
-                            log_system(f"Auto-restarting {app_id}...", "INFO")
-                            time.sleep(Config.AUTO_RESTART_DELAY)
-                            start_application(app_id)
-                    
-                    # Remove from running apps
-                    del running_apps[app_id]
-            
-            # Update uptime for running apps
-            for app_id, app_data in app_metadata.items():
-                if app_data.get('status') == 'running' and app_data.get('last_started'):
-                    app_data['uptime_seconds'] = app_data.get('uptime_seconds', 0) + 1
-            
-            # Save to MongoDB periodically
-            if mongo_available and apps_collection is not None and int(time.time()) % 300 == 0:  # Every 5 minutes
-                for app_id, app_data in app_metadata.items():
-                    apps_collection.update_one(
-                        {'app_id': app_id},
-                        {'$set': {
-                            'status': app_data.get('status'),
-                            'uptime_seconds': app_data.get('uptime_seconds', 0),
-                            'updated_at': datetime.now()
-                        }}
-                    )
-            
-            time.sleep(1)
-            
-        except Exception as e:
-            log_system(f"Monitoring error: {e}", "ERROR")
-            time.sleep(5)
-
-# ============================================================================
 # FLASK APPLICATION
 # ============================================================================
 
@@ -942,13 +2071,7 @@ CORS(app)
 platform_start_time = time.time()
 
 # ============================================================================
-# HTML TEMPLATES (REMAINS THE SAME - TOO LONG TO REPEAT)
-# ============================================================================
-
-# ... [HTML templates remain exactly the same as before] ...
-
-# ============================================================================
-# FLASK ROUTES - ADMIN PANEL (REMAINS THE SAME)
+# FLASK ROUTES - ADMIN PANEL
 # ============================================================================
 
 @app.route('/')
@@ -1025,7 +2148,7 @@ def view_logs(app_id):
     return render_template_string(LOGS_TEMPLATE, app=app_display)
 
 # ============================================================================
-# API ROUTES (REMAINS THE SAME)
+# API ROUTES
 # ============================================================================
 
 @app.route('/api/apps/create', methods=['POST'])
@@ -1535,18 +2658,21 @@ def api_system_stats():
     return jsonify(stats)
 
 # ============================================================================
-# STARTUP & SHUTDOWN HANDLERS
+# MAIN ENTRY POINT
 # ============================================================================
 
-def startup():
-    """Initialize platform on startup"""
-    global monitor_thread, app_metadata
+if __name__ == '__main__':
+    # Print startup banner
+    print("\n" + "="*60)
+    print("🚀 APP HOST PRO - Professional Application Hosting Platform")
+    print("="*60)
+    print(f"📊 Dashboard: https://zerodev-host.onrender.com")
+    print(f"👤 Admin: {Config.ADMIN_USERNAME}")
+    print(f"📁 Applications: {len(app_metadata)} loaded")
+    print(f"⚙️  Templates: {len(APPLICATION_TEMPLATES)} available")
+    print("="*60 + "\n")
     
-    log_system("Starting Application Hosting Platform", "INFO")
-    log_system(f"Python version: {sys.version}", "INFO")
-    log_system(f"Platform: {sys.platform}", "INFO")
-    
-    # Load applications from MongoDB
+    # Load applications from MongoDB on startup
     if mongo_available and apps_collection is not None:
         try:
             cursor = apps_collection.find({})
@@ -1564,77 +2690,23 @@ def startup():
     auto_start_count = 0
     for app_id, app_data in app_metadata.items():
         if app_data.get('auto_start', False):
-            threading.Thread(
-                target=start_application,
-                args=(app_id,),
-                daemon=True
-            ).start()
-            auto_start_count += 1
+            try:
+                start_application(app_id)
+                auto_start_count += 1
+            except Exception as e:
+                log_system(f"Failed to auto-start {app_id}: {e}", "ERROR")
     
-    log_system(f"Auto-starting {auto_start_count} applications", "INFO")
+    log_system(f"Auto-started {auto_start_count} applications", "INFO")
     
     # Start monitoring thread
     monitor_thread = threading.Thread(target=monitoring_worker, daemon=True)
     monitor_thread.start()
     
     log_system("Platform started successfully", "INFO")
-    log_system("=" * 50, "INFO")
-
-def shutdown():
-    """Clean shutdown of platform"""
-    global monitor_running
     
-    log_system("Shutting down platform...", "INFO")
-    
-    # Stop monitoring
-    monitor_running = False
-    if monitor_thread and monitor_thread.is_alive():
-        monitor_thread.join(timeout=5)
-    
-    # Stop all running applications
-    log_system(f"Stopping {len(running_apps)} running applications...", "INFO")
-    for app_id in list(running_apps.keys()):
-        stop_application(app_id, force=True)
-    
-    # Save state to MongoDB
-    if mongo_available and apps_collection is not None:
-        try:
-            for app_id, app_data in app_metadata.items():
-                apps_collection.update_one(
-                    {'app_id': app_id},
-                    {'$set': app_data},
-                    upsert=True
-                )
-        except Exception as e:
-            log_system(f"Error saving state to MongoDB: {e}", "ERROR")
-    
-    log_system("Platform shutdown complete", "INFO")
-
-# Register shutdown handler
-atexit.register(shutdown)
-
-# ============================================================================
-# MAIN ENTRY POINT
-# ============================================================================
-
-if __name__ == '__main__':
-    # Run startup
-    startup()
-    
-    # Print startup banner
-    print("\n" + "="*60)
-    print("🚀 APP HOST PRO - Professional Application Hosting Platform")
-    print("="*60)
-    print(f"📊 Dashboard: http://localhost:{os.getenv('PORT', 5000)}")
-    print(f"👤 Admin: {Config.ADMIN_USERNAME}")
-    print(f"📁 Applications: {len(app_metadata)} loaded")
-    print(f"⚙️  Templates: {len(APPLICATION_TEMPLATES)} available")
-    print("="*60 + "\n")
-    
-    # Get port from environment variable (Render/Railway provide this)
+    # Note: On Render, gunicorn will run the app
+    # For local development, you can still run with: python app.py
     port = int(os.getenv('PORT', 5000))
-    
-    # Start Flask app
     app.run(
         host='0.0.0.0',
         port=port,
