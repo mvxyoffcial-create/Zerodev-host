@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 100% WORKING Application Hosting Platform - Like Koyeb
-Everything works: buttons, package installation, deployment, logs
+Everything works: buttons, package installation, deployment, logs, DELETE, EDIT
 """
 
 import os
@@ -285,18 +285,39 @@ def restart_app(app_id):
     return start_app(app_id)
 
 def delete_app(app_id):
+    """FIXED: Properly delete app from database and filesystem"""
     try:
-        stop_app(app_id)
-        apps_col.delete_one({"app_id": app_id})
-        logs_col.delete_many({"app_id": app_id})
+        logger.info(f"Deleting app: {app_id}")
         
+        # Stop the app first
+        stop_app(app_id)
+        
+        # Delete from database
+        result = apps_col.delete_one({"app_id": app_id})
+        logger.info(f"Deleted from apps_col: {result.deleted_count} documents")
+        
+        # Delete logs
+        logs_result = logs_col.delete_many({"app_id": app_id})
+        logger.info(f"Deleted logs: {logs_result.deleted_count} documents")
+        
+        # Delete script file
         script_path = os.path.join(os.getcwd(), "apps", f"{app_id}.py")
         if os.path.exists(script_path):
             os.remove(script_path)
+            logger.info(f"Deleted script: {script_path}")
         
+        # Delete install marker
+        install_marker = os.path.join(os.getcwd(), "apps", f".{app_id}_installed")
+        if os.path.exists(install_marker):
+            os.remove(install_marker)
+            logger.info(f"Deleted install marker: {install_marker}")
+        
+        logger.info(f"✅ App {app_id} deleted successfully")
         return True
+        
     except Exception as e:
-        logger.error(f"Delete failed: {e}")
+        logger.error(f"Delete failed for {app_id}: {e}")
+        logger.error(traceback.format_exc())
         return False
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -363,8 +384,9 @@ DASHBOARD_HTML = '''<!DOCTYPE html>
 <tbody id="apps-tbody"><tr><td colspan="5" style="text-align:center;padding:2rem">Loading...</td></tr></tbody></table></div></div>
 
 <div class="modal" id="create-modal"><div class="modal-content">
-<div class="modal-header"><h2>Create Application</h2><button class="btn btn-sm" id="close-create">Close</button></div>
+<div class="modal-header"><h2 id="modal-title">Create Application</h2><button class="btn btn-sm" id="close-create">Close</button></div>
 <form id="create-form">
+<input type="hidden" id="edit-app-id" value="">
 <div class="form-group"><label>Application Name *</label><input type="text" id="app-name" required placeholder="My Telegram Bot"></div>
 <div class="form-group"><label>Template</label><select id="app-type">
 <option value="">Select template...</option>
@@ -380,7 +402,7 @@ DASHBOARD_HTML = '''<!DOCTYPE html>
 <div class="form-group"><label>Environment Variables (JSON)</label><textarea id="app-env" rows="3">{"BOT_TOKEN": "your_token_here"}</textarea></div>
 <div class="form-group"><label><input type="checkbox" id="auto-restart" checked> Auto-restart on crash</label>
 <label><input type="checkbox" id="auto-start" checked> Auto-start on boot</label></div>
-<button type="submit" class="btn btn-primary" style="width:100%">Create Application</button>
+<button type="submit" class="btn btn-primary" style="width:100%" id="submit-btn">Create Application</button>
 </form></div></div>
 
 <div class="modal" id="logs-modal"><div class="modal-content">
@@ -470,8 +492,18 @@ print("Application started!")`,reqs:[]}
 };
 
 let logsSource=null;
+let editMode=false;
 
-document.getElementById('create-btn').onclick=()=>{document.getElementById('create-modal').classList.add('show')};
+document.getElementById('create-btn').onclick=()=>{
+editMode=false;
+document.getElementById('modal-title').textContent='Create Application';
+document.getElementById('submit-btn').textContent='Create Application';
+document.getElementById('create-form').reset();
+document.getElementById('edit-app-id').value='';
+document.getElementById('app-env').value='{"BOT_TOKEN": "your_token_here"}';
+document.getElementById('create-modal').classList.add('show');
+};
+
 document.getElementById('close-create').onclick=()=>{document.getElementById('create-modal').classList.remove('show')};
 document.getElementById('close-logs').onclick=()=>{
 document.getElementById('logs-modal').classList.remove('show');
@@ -494,7 +526,8 @@ document.getElementById('create-form').onsubmit=async(e)=>{
 e.preventDefault();
 const btn=e.target.querySelector('button');
 btn.disabled=true;
-btn.textContent='Creating...';
+const originalText=btn.textContent;
+btn.textContent=editMode?'Updating...':'Creating...';
 
 try{
 const data={
@@ -507,13 +540,16 @@ auto_restart:document.getElementById('auto-restart').checked,
 auto_start:document.getElementById('auto-start').checked
 };
 
-const res=await fetch('/api/apps/create',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(data)});
+const appId=document.getElementById('edit-app-id').value;
+const url=editMode?`/api/apps/${appId}/update`:'/api/apps/create';
+const res=await fetch(url,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(data)});
 const result=await res.json();
 
 if(result.success){
-toast('✅ Application created!','success');
+toast(editMode?'✅ Application updated!':'✅ Application created!','success');
 document.getElementById('create-modal').classList.remove('show');
 document.getElementById('create-form').reset();
+editMode=false;
 loadApps();
 }else{
 toast('❌ '+result.message,'error');
@@ -522,7 +558,7 @@ toast('❌ '+result.message,'error');
 toast('❌ Error: '+err.message,'error');
 }finally{
 btn.disabled=false;
-btn.textContent='Create Application';
+btn.textContent=originalText;
 }
 };
 
@@ -554,6 +590,7 @@ tbody.innerHTML=apps.map(a=>`<tr>
 <td><div class="action-btns">
 ${a.status==='running'?`<button class="btn btn-warning btn-sm" onclick="doAction('${a.app_id}','stop')">Stop</button>`:`<button class="btn btn-success btn-sm" onclick="doAction('${a.app_id}','start')">Start</button>`}
 <button class="btn btn-primary btn-sm" onclick="viewLogs('${a.app_id}','${esc(a.app_name)}')">Logs</button>
+<button class="btn btn-sm" style="background:#8b5cf6;color:#fff" onclick="editApp('${a.app_id}')">Edit</button>
 <button class="btn btn-sm" style="background:#667eea;color:#fff" onclick="doAction('${a.app_id}','restart')">Restart</button>
 <button class="btn btn-danger btn-sm" onclick="doDelete('${a.app_id}','${esc(a.app_name)}')">Delete</button>
 </div></td></tr>`).join('');
@@ -588,11 +625,42 @@ toast('❌ Error: '+err.message,'error');
 
 async function doDelete(id,name){
 if(!confirm(`Delete "${name}"? This cannot be undone!`))return;
+toast('🗑️ Deleting...','info');
 try{
 const res=await fetch(`/api/apps/${id}`,{method:'DELETE'});
 const data=await res.json();
-toast(data.success?'✅ Deleted':'❌ '+data.message,data.success?'success':'error');
-if(data.success)loadApps();
+if(data.success){
+toast('✅ Application deleted successfully','success');
+loadApps();
+}else{
+toast('❌ Delete failed: '+data.message,'error');
+}
+}catch(err){
+toast('❌ Error: '+err.message,'error');
+}
+}
+
+async function editApp(id){
+try{
+const res=await fetch(`/api/apps/${id}`);
+const data=await res.json();
+if(data.success){
+const app=data.data;
+editMode=true;
+document.getElementById('modal-title').textContent='Edit Application';
+document.getElementById('submit-btn').textContent='Update Application';
+document.getElementById('edit-app-id').value=app.app_id;
+document.getElementById('app-name').value=app.app_name;
+document.getElementById('app-type').value=app.app_type||'custom';
+document.getElementById('app-script').value=app.script;
+document.getElementById('app-reqs').value=(app.requirements||[]).join('\\n');
+document.getElementById('app-env').value=JSON.stringify(app.env_vars||{},null,2);
+document.getElementById('auto-restart').checked=app.auto_restart!==false;
+document.getElementById('auto-start').checked=app.auto_start||false;
+document.getElementById('create-modal').classList.add('show');
+}else{
+toast('❌ Failed to load app data','error');
+}
 }catch(err){
 toast('❌ Error: '+err.message,'error');
 }
@@ -708,14 +776,85 @@ def api_list():
     except Exception as e:
         return jsonify({"success": False, "message": str(e)}), 500
 
+@app.route('/api/apps/<app_id>', methods=['GET'])
+@login_required
+def api_get_app(app_id):
+    """Get single app details for editing"""
+    try:
+        app = apps_col.find_one({"app_id": app_id}, {'_id': 0})
+        if app:
+            return jsonify({"success": True, "data": app})
+        return jsonify({"success": False, "message": "App not found"}), 404
+    except Exception as e:
+        return jsonify({"success": False, "message": str(e)}), 500
+
 @app.route('/api/apps/<app_id>', methods=['DELETE'])
 @login_required
 def api_delete(app_id):
+    """FIXED: Properly delete application"""
     try:
+        app = apps_col.find_one({"app_id": app_id})
+        if not app:
+            return jsonify({"success": False, "message": "Application not found"}), 404
+        
+        logger.info(f"API: Deleting app {app_id} - {app.get('app_name')}")
+        
         if delete_app(app_id):
-            return jsonify({"success": True, "message": "Application deleted"})
-        return jsonify({"success": False, "message": "Delete failed"}), 500
+            logger.info(f"API: Successfully deleted {app_id}")
+            return jsonify({"success": True, "message": "Application deleted successfully"})
+        
+        logger.error(f"API: Failed to delete {app_id}")
+        return jsonify({"success": False, "message": "Delete operation failed"}), 500
     except Exception as e:
+        logger.error(f"API delete error: {e}")
+        logger.error(traceback.format_exc())
+        return jsonify({"success": False, "message": str(e)}), 500
+
+@app.route('/api/apps/<app_id>/update', methods=['POST'])
+@login_required
+def api_update(app_id):
+    """Update existing application"""
+    try:
+        app = apps_col.find_one({"app_id": app_id})
+        if not app:
+            return jsonify({"success": False, "message": "Application not found"}), 404
+        
+        data = request.json
+        
+        # Stop app if running (will restart if changes require it)
+        was_running = app.get("status") == "running"
+        if was_running:
+            stop_app(app_id)
+        
+        # Update document
+        update_data = {
+            "app_name": data.get('app_name', app['app_name']),
+            "app_type": data.get('app_type', app.get('app_type', 'custom')),
+            "script": data.get('script', app['script']),
+            "requirements": data.get('requirements', app.get('requirements', [])),
+            "env_vars": data.get('env_vars', app.get('env_vars', {})),
+            "auto_restart": data.get('auto_restart', app.get('auto_restart', True)),
+            "auto_start": data.get('auto_start', app.get('auto_start', False)),
+            "updated_at": datetime.utcnow()
+        }
+        
+        apps_col.update_one({"app_id": app_id}, {"$set": update_data})
+        
+        # Remove install marker to force reinstall with new requirements
+        install_marker = os.path.join(os.getcwd(), "apps", f".{app_id}_installed")
+        if os.path.exists(install_marker):
+            os.remove(install_marker)
+        
+        log_to_db(app_id, "INFO", f"Application updated: {update_data['app_name']}")
+        
+        # Restart if was running
+        if was_running:
+            threading.Thread(target=start_app, args=(app_id,), daemon=True).start()
+        
+        return jsonify({"success": True, "message": "Application updated successfully"})
+    except Exception as e:
+        logger.error(f"Update error: {e}")
+        logger.error(traceback.format_exc())
         return jsonify({"success": False, "message": str(e)}), 500
 
 @app.route('/api/apps/<app_id>/start', methods=['POST'])
