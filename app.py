@@ -888,12 +888,10 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text('Hello! I am running on the hosting platform! 🚀')
 
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    help_text = """
-Available commands:
+    help_text = """Available commands:
 /start - Start the bot
 /help - Show this help message
-/status - Check bot status
-    """
+/status - Check bot status"""
     await update.message.reply_text(help_text)
 
 async def status(update: Update, context: ContextTypes.DEFAULT_TYPE):
