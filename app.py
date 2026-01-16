@@ -1,3 +1,41 @@
+"""
+╔══════════════════════════════════════════════════════════════════════════════╗
+║                    PROFESSIONAL APPLICATION HOSTING PLATFORM                  ║
+║                         Similar to Koyeb/Railway/Render                       ║
+║                                                                                ║
+║  Host ANY application 24/7: Telegram bots, APIs, Discord bots, Workers, etc. ║
+╚══════════════════════════════════════════════════════════════════════════════╝
+
+Author: Production-Ready Hosting Platform
+Version: 1.0.0
+Python: 3.10+
+
+DEPLOYMENT INSTRUCTIONS:
+------------------------
+Render.com:
+1. Create new Web Service
+2. Build Command: pip install -r requirements.txt
+3. Start Command: gunicorn --worker-class eventlet -w 1 --bind 0.0.0.0:$PORT app:app
+4. Environment Variables: MONGO_URI, SECRET_KEY, ADMIN_USERNAME, ADMIN_PASSWORD
+
+Railway:
+1. Create new project from GitHub
+2. Add environment variables
+3. Railway auto-detects Python and runs with Procfile
+
+VPS/Server:
+1. Install Python 3.10+
+2. pip install -r requirements.txt
+3. Run with: gunicorn --worker-class eventlet -w 1 --bind 0.0.0.0:8080 app:app
+4. Setup systemd service for auto-start
+5. Configure nginx reverse proxy
+
+"""
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# IMPORTS
+# ═══════════════════════════════════════════════════════════════════════════════
+
 import os
 import sys
 import json
@@ -1605,3 +1643,4 @@ DASHBOARD_PAGE = '''
     </script>
 </body>
 </html>
+'''
