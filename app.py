@@ -1056,10 +1056,11 @@ DASHBOARD_PAGE = '''
             z-index: 1000;
             align-items: center;
             justify-content: center;
+            padding: 1rem;
         }
         
         .modal.active {
-            display: flex;
+            display: flex !important;
         }
         
         .modal-content {
@@ -1182,7 +1183,7 @@ DASHBOARD_PAGE = '''
         <div class="card">
             <div class="card-header">
                 <h2>Applications</h2>
-                <button class="btn btn-primary" onclick="showCreateModal()">+ Create Application</button>
+                <button class="btn btn-primary" onclick="showCreateModal(); return false;">+ Create Application</button>
             </div>
             
             <table id="apps-table">
@@ -1288,6 +1289,21 @@ python-telegram-bot>=20.0"></textarea>
         // Templates data
         const templates = {{ templates|tojson }};
         
+        // Prevent default form submission and ensure buttons work
+        document.addEventListener('DOMContentLoaded', function() {
+            console.log('Dashboard loaded successfully');
+            loadApplications();
+            
+            // Ensure modal events are properly bound
+            const createBtn = document.querySelector('[onclick="showCreateModal()"]');
+            if (createBtn) {
+                createBtn.addEventListener('click', function(e) {
+                    e.preventDefault();
+                    showCreateModal();
+                });
+            }
+        });
+        
         // Load applications
         async function loadApplications() {
             try {
@@ -1297,16 +1313,34 @@ python-telegram-bot>=20.0"></textarea>
                 if (data.success) {
                     renderApplications(data.data);
                     updateStats(data.data);
+                } else {
+                    console.error('Failed to load apps:', data.message);
+                    // Show empty state
+                    document.getElementById('apps-tbody').innerHTML = `
+                        <tr>
+                            <td colspan="6" style="text-align: center; padding: 2rem; color: var(--text-light);">
+                                No applications yet. Create your first application!
+                            </td>
+                        </tr>
+                    `;
                 }
             } catch (error) {
+                console.error('Error loading applications:', error);
                 showToast('Failed to load applications', 'error');
+                document.getElementById('apps-tbody').innerHTML = `
+                    <tr>
+                        <td colspan="6" style="text-align: center; padding: 2rem; color: var(--text-light);">
+                            No applications yet. Create your first application!
+                        </td>
+                    </tr>
+                `;
             }
         }
         
         function renderApplications(apps) {
             const tbody = document.getElementById('apps-tbody');
             
-            if (apps.length === 0) {
+            if (!apps || apps.length === 0) {
                 tbody.innerHTML = `
                     <tr>
                         <td colspan="6" style="text-align: center; padding: 2rem; color: var(--text-light);">
@@ -1319,8 +1353,8 @@ python-telegram-bot>=20.0"></textarea>
             
             tbody.innerHTML = apps.map(app => `
                 <tr>
-                    <td><strong>${app.app_name}</strong></td>
-                    <td>${app.app_type || 'Custom'}</td>
+                    <td><strong>${escapeHtml(app.app_name)}</strong></td>
+                    <td>${escapeHtml(app.app_type || 'Custom')}</td>
                     <td>
                         <span class="status-badge status-${app.status}">
                             ${app.status.toUpperCase()}
@@ -1334,13 +1368,19 @@ python-telegram-bot>=20.0"></textarea>
                                 ? `<button class="btn btn-sm" style="background: var(--warning);" onclick="stopApp('${app.app_id}')">Stop</button>`
                                 : `<button class="btn btn-success btn-sm" onclick="startApp('${app.app_id}')">Start</button>`
                             }
-                            <button class="btn btn-primary btn-sm" onclick="viewLogs('${app.app_id}', '${app.app_name}')">Logs</button>
+                            <button class="btn btn-primary btn-sm" onclick="viewLogs('${app.app_id}', '${escapeHtml(app.app_name)}')">Logs</button>
                             <button class="btn btn-sm" style="background: var(--primary);" onclick="restartApp('${app.app_id}')">Restart</button>
-                            <button class="btn btn-danger btn-sm" onclick="deleteApp('${app.app_id}', '${app.app_name}')">Delete</button>
+                            <button class="btn btn-danger btn-sm" onclick="deleteApp('${app.app_id}', '${escapeHtml(app.app_name)}')">Delete</button>
                         </div>
                     </td>
                 </tr>
             `).join('');
+        }
+        
+        function escapeHtml(text) {
+            const div = document.createElement('div');
+            div.textContent = text;
+            return div.innerHTML;
         }
         
         function updateStats(apps) {
@@ -1359,77 +1399,136 @@ python-telegram-bot>=20.0"></textarea>
         
         // Modal functions
         function showCreateModal() {
-            document.getElementById('create-modal').classList.add('active');
+            console.log('Opening create modal...');
+            const modal = document.getElementById('create-modal');
+            if (modal) {
+                modal.classList.add('active');
+                modal.style.display = 'flex';
+                // Focus on first input
+                setTimeout(() => {
+                    const firstInput = document.getElementById('app-name');
+                    if (firstInput) firstInput.focus();
+                }, 100);
+            } else {
+                console.error('Modal element not found');
+            }
         }
         
         function closeCreateModal() {
-            document.getElementById('create-modal').classList.remove('active');
-            document.getElementById('create-form').reset();
+            const modal = document.getElementById('create-modal');
+            if (modal) {
+                modal.classList.remove('active');
+                modal.style.display = 'none';
+                document.getElementById('create-form').reset();
+                document.getElementById('app-env').value = '{}';
+            }
         }
         
         function loadTemplate() {
             const type = document.getElementById('app-type').value;
+            console.log('Loading template:', type);
+            
             if (type && type !== 'custom' && templates[type]) {
                 document.getElementById('app-script').value = templates[type].code;
                 document.getElementById('app-requirements').value = templates[type].requirements.join('\n');
+                showToast('Template loaded successfully!', 'success');
             } else if (type === 'custom') {
                 document.getElementById('app-script').value = '# Your custom Python code here\n\nif __name__ == "__main__":\n    print("Application started!")\n';
                 document.getElementById('app-requirements').value = '';
+                showToast('Blank template loaded', 'success');
             }
         }
         
         // Create application
         document.getElementById('create-form').addEventListener('submit', async (e) => {
             e.preventDefault();
+            e.stopPropagation();
             
-            const appName = document.getElementById('app-name').value;
-            const appType = document.getElementById('app-type').value;
-            const script = document.getElementById('app-script').value;
-            const requirements = document.getElementById('app-requirements').value
-                .split('\n')
-                .map(r => r.trim())
-                .filter(r => r);
+            console.log('Form submitted');
             
-            let envVars = {};
+            const submitBtn = e.target.querySelector('button[type="submit"]');
+            const originalText = submitBtn.textContent;
+            submitBtn.disabled = true;
+            submitBtn.textContent = 'Creating...';
+            
             try {
-                const envText = document.getElementById('app-env').value.trim();
-                if (envText) {
-                    envVars = JSON.parse(envText);
+                const appName = document.getElementById('app-name').value.trim();
+                const appType = document.getElementById('app-type').value;
+                const script = document.getElementById('app-script').value;
+                const requirements = document.getElementById('app-requirements').value
+                    .split('\n')
+                    .map(r => r.trim())
+                    .filter(r => r && !r.startsWith('#'));
+                
+                if (!appName) {
+                    showToast('Please enter an application name', 'error');
+                    submitBtn.disabled = false;
+                    submitBtn.textContent = originalText;
+                    return;
                 }
-            } catch (error) {
-                showToast('Invalid JSON in environment variables', 'error');
-                return;
-            }
-            
-            const autoRestart = document.getElementById('auto-restart').checked;
-            const autoStart = document.getElementById('auto-start').checked;
-            
-            try {
+                
+                if (!script) {
+                    showToast('Please enter your Python script', 'error');
+                    submitBtn.disabled = false;
+                    submitBtn.textContent = originalText;
+                    return;
+                }
+                
+                let envVars = {};
+                try {
+                    const envText = document.getElementById('app-env').value.trim();
+                    if (envText) {
+                        envVars = JSON.parse(envText);
+                    }
+                } catch (error) {
+                    showToast('Invalid JSON in environment variables', 'error');
+                    submitBtn.disabled = false;
+                    submitBtn.textContent = originalText;
+                    return;
+                }
+                
+                const autoRestart = document.getElementById('auto-restart').checked;
+                const autoStart = document.getElementById('auto-start').checked;
+                
+                const payload = {
+                    app_name: appName,
+                    app_type: appType || 'custom',
+                    script: script,
+                    requirements: requirements,
+                    env_vars: envVars,
+                    auto_restart: autoRestart,
+                    auto_start: autoStart
+                };
+                
+                console.log('Creating app with payload:', payload);
+                
                 const res = await fetch('/api/apps/create', {
                     method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({
-                        app_name: appName,
-                        app_type: appType,
-                        script: script,
-                        requirements: requirements,
-                        env_vars: envVars,
-                        auto_restart: autoRestart,
-                        auto_start: autoStart
-                    })
+                    headers: { 
+                        'Content-Type': 'application/json',
+                        'Accept': 'application/json'
+                    },
+                    body: JSON.stringify(payload)
                 });
                 
                 const data = await res.json();
+                console.log('Response:', data);
                 
                 if (data.success) {
-                    showToast('Application created successfully!', 'success');
+                    showToast('✅ Application created successfully!', 'success');
                     closeCreateModal();
-                    loadApplications();
+                    setTimeout(() => {
+                        loadApplications();
+                    }, 500);
                 } else {
-                    showToast(data.message, 'error');
+                    showToast('❌ ' + (data.message || 'Failed to create application'), 'error');
                 }
             } catch (error) {
-                showToast('Failed to create application', 'error');
+                console.error('Create error:', error);
+                showToast('❌ Failed to create application: ' + error.message, 'error');
+            } finally {
+                submitBtn.disabled = false;
+                submitBtn.textContent = originalText;
             }
         });
         
@@ -1527,21 +1626,44 @@ python-telegram-bot>=20.0"></textarea>
         // Toast notification
         function showToast(message, type = 'info') {
             const toast = document.getElementById('toast');
+            if (!toast) return;
+            
             toast.textContent = message;
-            toast.style.background = type === 'success' ? 'var(--success)' : type === 'error' ? 'var(--error)' : 'white';
-            toast.style.color = type === 'info' ? 'var(--text)' : 'white';
+            
+            // Set colors based on type
+            if (type === 'success') {
+                toast.style.background = '#10b981';
+                toast.style.color = 'white';
+            } else if (type === 'error') {
+                toast.style.background = '#ef4444';
+                toast.style.color = 'white';
+            } else {
+                toast.style.background = 'white';
+                toast.style.color = '#1f2937';
+            }
+            
             toast.classList.add('show');
             
             setTimeout(() => {
                 toast.classList.remove('show');
-            }, 3000);
+            }, 4000);
         }
         
-        // Load applications on page load
-        loadApplications();
-        
-        // Refresh every 10 seconds
+        // Auto-refresh applications every 10 seconds
         setInterval(loadApplications, 10000);
+        
+        // Close modal when clicking outside
+        document.addEventListener('click', function(e) {
+            const createModal = document.getElementById('create-modal');
+            const logsModal = document.getElementById('logs-modal');
+            
+            if (e.target === createModal) {
+                closeCreateModal();
+            }
+            if (e.target === logsModal) {
+                closeLogsModal();
+            }
+        });
     </script>
 </body>
 </html>
