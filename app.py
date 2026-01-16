@@ -44,9 +44,7 @@ class Config:
     # Security
     SECRET_KEY = os.getenv('SECRET_KEY', 'dev-secret-key-change-in-production')
     ADMIN_USERNAME = os.getenv('ADMIN_USERNAME', 'admin')
-    ADMIN_PASSWORD_HASH = generate_password_hash(
-        os.getenv('ADMIN_PASSWORD', 'admin123')
-    )
+    ADMIN_PASSWORD = os.getenv('ADMIN_PASSWORD', 'admin123')
     
     # MongoDB
     MONGO_URI = os.getenv('MONGO_URI', 'mongodb://localhost:27017/')
@@ -115,6 +113,7 @@ try:
     # Test connection
     client.admin.command('ping')
     print("✓ MongoDB connection successful")
+    mongo_available = True
     
 except Exception as e:
     print(f"✗ MongoDB connection failed: {e}")
@@ -123,6 +122,7 @@ except Exception as e:
     apps_collection = None
     logs_collection = None
     storage_collection = None
+    mongo_available = False
 
 # ============================================================================
 # GLOBAL VARIABLES
@@ -193,9 +193,11 @@ if __name__ == "__main__":
         'script': '''from flask import Flask, jsonify, request
 from flask_cors import CORS
 import os
+import time
 
 app = Flask(__name__)
 CORS(app)
+start_time = time.time()
 
 @app.route('/')
 def home():
@@ -221,13 +223,11 @@ def echo():
 @app.route('/api/env')
 def show_env():
     # Show non-sensitive environment variables
-    env_vars = {k: v if 'KEY' not in k and 'TOKEN' not in k else '***' 
+    env_vars = {k: v if 'KEY' not in k and 'TOKEN' not in k and 'SECRET' not in k else '***' 
                 for k, v in os.environ.items()}
     return jsonify({"environment": env_vars})
 
 if __name__ == '__main__':
-    import time
-    start_time = time.time()
     print("🌐 Flask API starting on http://0.0.0.0:5000")
     app.run(host='0.0.0.0', port=5000, debug=False)'''
     },
@@ -666,7 +666,7 @@ class LogCaptureThread(threading.Thread):
         }
         
         # Store in MongoDB
-        if logs_collection:
+        if mongo_available and logs_collection is not None:
             try:
                 logs_collection.insert_one(log_entry)
             except Exception as e:
@@ -740,7 +740,7 @@ def start_application(app_id: str) -> tuple[bool, str]:
         app_data['restart_count'] = app_data.get('restart_count', 0) + 1
         
         # Update in MongoDB
-        if apps_collection:
+        if mongo_available and apps_collection is not None:
             apps_collection.update_one(
                 {'app_id': app_id},
                 {'$set': {
@@ -798,7 +798,7 @@ def stop_application(app_id: str, force: bool = False) -> tuple[bool, str]:
                 app_data['uptime_seconds'] = app_data.get('uptime_seconds', 0) + uptime
         
         # Update in MongoDB
-        if apps_collection:
+        if mongo_available and apps_collection is not None:
             apps_collection.update_one(
                 {'app_id': app_id},
                 {'$set': {'status': 'stopped', 'pid': None}}
@@ -906,7 +906,7 @@ def monitoring_worker():
                     app_data['uptime_seconds'] = app_data.get('uptime_seconds', 0) + 1
             
             # Save to MongoDB periodically
-            if apps_collection and int(time.time()) % 300 == 0:  # Every 5 minutes
+            if mongo_available and apps_collection is not None and int(time.time()) % 300 == 0:  # Every 5 minutes
                 for app_id, app_data in app_metadata.items():
                     apps_collection.update_one(
                         {'app_id': app_id},
@@ -2237,7 +2237,7 @@ def login():
         username = request.form.get('username', '').strip()
         password = request.form.get('password', '')
         
-        if username == Config.ADMIN_USERNAME and check_password_hash(Config.ADMIN_PASSWORD_HASH, password):
+        if username == Config.ADMIN_USERNAME and password == Config.ADMIN_PASSWORD:
             session['authenticated'] = True
             session['username'] = username
             session['login_time'] = datetime.now().isoformat()
@@ -2323,7 +2323,7 @@ def api_create_app():
         app_metadata[app_id] = app_data
         
         # Save to MongoDB
-        if apps_collection:
+        if mongo_available and apps_collection is not None:
             app_data_mongo = app_data.copy()
             app_data_mongo['app_id'] = app_id
             apps_collection.insert_one(app_data_mongo)
@@ -2428,7 +2428,7 @@ def api_update_app(app_id):
         app_data['updated_at'] = datetime.now().isoformat()
         
         # Update MongoDB
-        if apps_collection:
+        if mongo_available and apps_collection is not None:
             apps_collection.update_one(
                 {'app_id': app_id},
                 {'$set': app_data}
@@ -2456,15 +2456,15 @@ def api_delete_app(app_id):
         del app_metadata[app_id]
         
         # Remove from MongoDB
-        if apps_collection:
+        if mongo_available and apps_collection is not None:
             apps_collection.delete_one({'app_id': app_id})
         
         # Remove logs
-        if logs_collection:
+        if mongo_available and logs_collection is not None:
             logs_collection.delete_many({'app_id': app_id})
         
         # Remove storage
-        if storage_collection:
+        if mongo_available and storage_collection is not None:
             storage_collection.delete_many({'app_id': app_id})
         
         # Remove app directory
@@ -2537,7 +2537,7 @@ def api_get_logs(app_id):
         logs = []
         
         # Try MongoDB first
-        if logs_collection:
+        if mongo_available and logs_collection is not None:
             cursor = logs_collection.find(
                 {'app_id': app_id},
                 sort=[('timestamp', DESCENDING)],
@@ -2609,7 +2609,7 @@ def api_clear_logs(app_id):
         return jsonify({'error': 'Application not found'}), 404
     
     try:
-        if logs_collection:
+        if mongo_available and logs_collection is not None:
             logs_collection.delete_many({'app_id': app_id})
         
         # Clear queue
@@ -2636,7 +2636,7 @@ def api_download_logs(app_id):
     try:
         # Get logs
         logs = []
-        if logs_collection:
+        if mongo_available and logs_collection is not None:
             cursor = logs_collection.find(
                 {'app_id': app_id},
                 sort=[('timestamp', ASCENDING)]
@@ -2748,7 +2748,7 @@ def api_update_env(app_id):
         app_metadata[app_id]['updated_at'] = datetime.now().isoformat()
         
         # Update MongoDB
-        if apps_collection:
+        if mongo_available and apps_collection is not None:
             apps_collection.update_one(
                 {'app_id': app_id},
                 {'$set': {'env_vars': env_vars, 'updated_at': datetime.now()}}
@@ -2794,7 +2794,7 @@ def startup():
     log_system(f"Platform: {sys.platform}", "INFO")
     
     # Load applications from MongoDB
-    if apps_collection:
+    if mongo_available and apps_collection is not None:
         try:
             cursor = apps_collection.find({})
             for doc in cursor:
@@ -2844,7 +2844,7 @@ def shutdown():
         stop_application(app_id, force=True)
     
     # Save state to MongoDB
-    if apps_collection:
+    if mongo_available and apps_collection is not None:
         try:
             for app_id, app_data in app_metadata.items():
                 apps_collection.update_one(
