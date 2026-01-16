@@ -1,91 +1,112 @@
-#!/usr/bin/env python3
 """
-Professional Application Hosting Platform
-Similar to Koyeb/Railway/Render
-Supports: Telegram Bots, APIs, Discord Bots, Workers, and any Python application
+Professional Application Hosting Platform (Koyeb Clone)
+Deploy and manage Python applications 24/7
+
+Author: AI Assistant
+Version: 1.0.0
+License: MIT
 """
 
 import os
 import sys
-import subprocess
-import threading
+import json
 import time
 import signal
-import uuid
-import json
+import subprocess
+import threading
+import queue
 import logging
-import re
 from datetime import datetime, timedelta
-from queue import Queue, Empty
 from functools import wraps
+from typing import Dict, List, Optional, Any
+import secrets
+import hashlib
 
 from flask import Flask, render_template_string, request, jsonify, session, redirect, url_for, Response
 from flask_cors import CORS
-from pymongo import MongoClient
-from pymongo.errors import ConnectionFailure
+from pymongo import MongoClient, ASCENDING, DESCENDING
+from pymongo.errors import PyMongoError
 import psutil
 
-# ═══════════════════════════════════════════════════════════════════════
-# CONFIGURATION
-# ═══════════════════════════════════════════════════════════════════════
-
-ADMIN_USERNAME = os.environ.get("ADMIN_USERNAME", "venuboy")
-ADMIN_PASSWORD = os.environ.get("ADMIN_PASSWORD", "venuboy")
-MONGO_URI = os.environ.get("MONGO_URI", "mongodb+srv://Zerobothost:zerobothost@cluster0.bl0tf2.mongodb.net/?appName=Cluster0")
-SECRET_KEY = os.environ.get("SECRET_KEY", "your-secret-key-change-in-production")
-
-MAX_LOGS_PER_APP = 5000
-LOG_RETENTION_DAYS = 7
-HEALTH_CHECK_INTERVAL = 30
-MAX_RESTART_ATTEMPTS = 5
-COMMAND_TIMEOUT = 60
-
-# ═══════════════════════════════════════════════════════════════════════
-# FLASK APP SETUP
-# ═══════════════════════════════════════════════════════════════════════
+# ═══════════════════════════════════════════════════════════════════
+# CONFIGURATION & CONSTANTS
+# ═══════════════════════════════════════════════════════════════════
 
 app = Flask(__name__)
-app.secret_key = SECRET_KEY
+app.config['SECRET_KEY'] = os.getenv('SECRET_KEY', secrets.token_hex(32))
+app.config['MAX_CONTENT_LENGTH'] = 16 * 1024 * 1024  # 16MB max file size
 CORS(app)
 
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+# Admin credentials (use environment variables in production)
+ADMIN_USERNAME = os.getenv('ADMIN_USERNAME', 'admin')
+ADMIN_PASSWORD = os.getenv('ADMIN_PASSWORD', 'admin123')  # Change this!
+
+# MongoDB connection
+MONGO_URI = os.getenv('MONGO_URI', 'mongodb://localhost:27017/')
+DB_NAME = 'hosting_platform'
+
+# Platform configuration
+MAX_APPS = 50
+LOG_RETENTION_DAYS = 7
+MAX_LOGS_PER_APP = 10000
+HEALTH_CHECK_INTERVAL = 30  # seconds
+MAX_RESTART_ATTEMPTS = 3
+
+# Logging setup
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+)
 logger = logging.getLogger(__name__)
 
-# ═══════════════════════════════════════════════════════════════════════
+# ═══════════════════════════════════════════════════════════════════
 # MONGODB SETUP
-# ═══════════════════════════════════════════════════════════════════════
+# ═══════════════════════════════════════════════════════════════════
 
 try:
     mongo_client = MongoClient(MONGO_URI, serverSelectionTimeoutMS=5000)
-    mongo_client.admin.command('ping')
-    db = mongo_client.hosting_platform
+    mongo_client.server_info()  # Test connection
+    db = mongo_client[DB_NAME]
     
-    applications_col = db.applications
-    logs_col = db.logs
-    storage_col = db.storage
+    # Collections
+    applications_col = db['applications']
+    logs_col = db['logs']
+    storage_col = db['storage']
     
-    logs_col.create_index([("app_id", 1), ("timestamp", -1)])
-    applications_col.create_index("app_id", unique=True)
+    # Create indexes
+    applications_col.create_index([('app_id', ASCENDING)], unique=True)
+    logs_col.create_index([('app_id', ASCENDING), ('timestamp', DESCENDING)])
+    storage_col.create_index([('app_id', ASCENDING), ('key', ASCENDING)])
     
-    logger.info("✓ MongoDB connected successfully")
-except ConnectionFailure as e:
-    logger.error(f"✗ MongoDB connection failed: {e}")
+    logger.info("MongoDB connected successfully")
+except Exception as e:
+    logger.error(f"MongoDB connection failed: {e}")
     sys.exit(1)
 
-# ═══════════════════════════════════════════════════════════════════════
-# GLOBAL STATE
-# ═══════════════════════════════════════════════════════════════════════
+# ═══════════════════════════════════════════════════════════════════
+# GLOBAL VARIABLES
+# ═══════════════════════════════════════════════════════════════════
 
-running_processes = {}
-log_queues = {}
-log_threads = {}
-app_start_times = {}
+running_apps: Dict[str, subprocess.Popen] = {}
+log_queues: Dict[str, queue.Queue] = {}
+log_threads: Dict[str, threading.Thread] = {}
+app_start_times: Dict[str, datetime] = {}
+shutdown_event = threading.Event()
 
-# ═══════════════════════════════════════════════════════════════════════
+# ═══════════════════════════════════════════════════════════════════
 # HELPER FUNCTIONS
-# ═══════════════════════════════════════════════════════════════════════
+# ═══════════════════════════════════════════════════════════════════
+
+def generate_app_id():
+    """Generate unique application ID"""
+    return f"app_{secrets.token_hex(8)}"
+
+def hash_password(password: str) -> str:
+    """Hash password for storage"""
+    return hashlib.sha256(password.encode()).hexdigest()
 
 def login_required(f):
+    """Decorator for routes requiring authentication"""
     @wraps(f)
     def decorated_function(*args, **kwargs):
         if 'logged_in' not in session:
@@ -93,709 +114,613 @@ def login_required(f):
         return f(*args, **kwargs)
     return decorated_function
 
-def validate_python_code(code):
-    try:
-        compile(code, '<string>', 'exec')
-        return True, "Valid Python code"
-    except SyntaxError as e:
-        return False, f"Syntax Error: {e.msg} at line {e.lineno}"
-    except Exception as e:
-        return False, f"Error: {str(e)}"
+def api_auth_required(f):
+    """Decorator for API routes requiring authentication"""
+    @wraps(f)
+    def decorated_function(*args, **kwargs):
+        if 'logged_in' not in session:
+            return jsonify({'error': 'Authentication required'}), 401
+        return f(*args, **kwargs)
+    return decorated_function
 
-def get_app_directory(app_id):
-    app_dir = os.path.join(os.getcwd(), "apps", app_id)
-    os.makedirs(app_dir, exist_ok=True)
-    return app_dir
-
-def install_requirements(app_id, requirements):
-    if not requirements:
-        return True, "No requirements to install"
-    
-    app_dir = get_app_directory(app_id)
-    req_file = os.path.join(app_dir, "requirements.txt")
-    
-    try:
-        with open(req_file, 'w') as f:
-            f.write('\n'.join(requirements))
-        
-        log_message(app_id, "INFO", f"Installing {len(requirements)} packages...")
-        
-        process = subprocess.Popen(
-            [sys.executable, "-m", "pip", "install", "-r", req_file, "--upgrade"],
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
-            cwd=app_dir,
-            text=True
-        )
-        
-        for line in iter(process.stdout.readline, ''):
-            if line:
-                log_message(app_id, "INFO", line.strip())
-        
-        process.wait()
-        
-        if process.returncode == 0:
-            log_message(app_id, "INFO", "✓ All packages installed successfully")
-            return True, "Requirements installed successfully"
+def get_app_status(app_id: str) -> str:
+    """Get current application status"""
+    if app_id in running_apps:
+        proc = running_apps[app_id]
+        if proc.poll() is None:
+            return 'running'
         else:
-            log_message(app_id, "ERROR", "Package installation failed")
-            return False, "Installation failed"
-            
-    except Exception as e:
-        log_message(app_id, "ERROR", f"Installation error: {str(e)}")
-        return False, f"Installation error: {str(e)}"
+            return 'crashed'
+    return 'stopped'
 
-def log_message(app_id, level, message):
-    log_entry = {
-        "app_id": app_id,
-        "timestamp": datetime.utcnow(),
-        "level": level,
-        "message": message
-    }
-    
+def get_app_uptime(app_id: str) -> int:
+    """Get application uptime in seconds"""
+    if app_id in app_start_times and get_app_status(app_id) == 'running':
+        return int((datetime.utcnow() - app_start_times[app_id]).total_seconds())
+    return 0
+
+def save_log(app_id: str, level: str, message: str):
+    """Save log entry to MongoDB"""
     try:
+        log_entry = {
+            'app_id': app_id,
+            'timestamp': datetime.utcnow(),
+            'level': level,
+            'message': message
+        }
         logs_col.insert_one(log_entry)
-        cutoff = datetime.utcnow() - timedelta(days=LOG_RETENTION_DAYS)
-        logs_col.delete_many({"app_id": app_id, "timestamp": {"$lt": cutoff}})
         
-        total_logs = logs_col.count_documents({"app_id": app_id})
-        if total_logs > MAX_LOGS_PER_APP:
-            excess = total_logs - MAX_LOGS_PER_APP
-            old_logs = logs_col.find({"app_id": app_id}).sort("timestamp", 1).limit(excess)
-            logs_col.delete_many({"_id": {"$in": [log["_id"] for log in old_logs]}})
+        # Queue for real-time streaming
+        if app_id in log_queues:
+            log_queues[app_id].put(log_entry)
+        
+        # Cleanup old logs
+        log_count = logs_col.count_documents({'app_id': app_id})
+        if log_count > MAX_LOGS_PER_APP:
+            oldest_logs = logs_col.find({'app_id': app_id}).sort('timestamp', ASCENDING).limit(log_count - MAX_LOGS_PER_APP)
+            for log in oldest_logs:
+                logs_col.delete_one({'_id': log['_id']})
     except Exception as e:
         logger.error(f"Failed to save log: {e}")
-    
-    if app_id in log_queues:
-        try:
-            log_queues[app_id].put(log_entry, block=False)
-        except:
-            pass
 
-# ═══════════════════════════════════════════════════════════════════════
-# LOG CAPTURE THREAD
-# ═══════════════════════════════════════════════════════════════════════
+# ═══════════════════════════════════════════════════════════════════
+# PROCESS MANAGEMENT FUNCTIONS
+# ═══════════════════════════════════════════════════════════════════
 
 class LogCaptureThread(threading.Thread):
-    def __init__(self, app_id, process):
+    """Thread to capture subprocess output in real-time"""
+    
+    def __init__(self, app_id: str, process: subprocess.Popen):
         super().__init__(daemon=True)
         self.app_id = app_id
         self.process = process
         self.running = True
     
     def run(self):
-        try:
-            for line in self.process.stdout:
-                if not self.running:
-                    break
-                line = line.strip()
-                if line:
-                    level = "INFO"
-                    line_lower = line.lower()
-                    if "error" in line_lower or "exception" in line_lower:
-                        level = "ERROR"
-                    elif "warning" in line_lower or "warn" in line_lower:
-                        level = "WARNING"
-                    elif "debug" in line_lower:
-                        level = "DEBUG"
-                    
-                    log_message(self.app_id, level, line)
-        except Exception as e:
-            logger.error(f"Log capture error for {self.app_id}: {e}")
+        """Capture stdout and stderr"""
+        while self.running and self.process.poll() is None:
+            try:
+                # Read stdout
+                if self.process.stdout:
+                    line = self.process.stdout.readline()
+                    if line:
+                        message = line.decode('utf-8', errors='ignore').strip()
+                        if message:
+                            save_log(self.app_id, 'INFO', message)
+                
+                # Read stderr
+                if self.process.stderr:
+                    line = self.process.stderr.readline()
+                    if line:
+                        message = line.decode('utf-8', errors='ignore').strip()
+                        if message:
+                            save_log(self.app_id, 'ERROR', message)
+            except Exception as e:
+                logger.error(f"Log capture error for {self.app_id}: {e}")
+                break
     
     def stop(self):
+        """Stop log capture"""
         self.running = False
 
-# ═══════════════════════════════════════════════════════════════════════
-# PROCESS MANAGEMENT
-# ═══════════════════════════════════════════════════════════════════════
-
-def start_application(app_id):
+def install_requirements(app_id: str, requirements: List[str]) -> bool:
+    """Install pip requirements for application"""
+    if not requirements:
+        return True
+    
+    save_log(app_id, 'INFO', f"Installing {len(requirements)} packages...")
+    
     try:
-        app = applications_col.find_one({"app_id": app_id})
-        if not app:
-            return False, "Application not found"
+        for package in requirements:
+            package = package.strip()
+            if not package or package.startswith('#'):
+                continue
+            
+            save_log(app_id, 'INFO', f"Installing {package}...")
+            result = subprocess.run(
+                [sys.executable, '-m', 'pip', 'install', package],
+                capture_output=True,
+                text=True,
+                timeout=300
+            )
+            
+            if result.returncode != 0:
+                save_log(app_id, 'ERROR', f"Failed to install {package}: {result.stderr}")
+                return False
+            
+            save_log(app_id, 'INFO', f"Successfully installed {package}")
         
-        if app_id in running_processes and running_processes[app_id].poll() is None:
-            return False, "Application is already running"
+        return True
+    except Exception as e:
+        save_log(app_id, 'ERROR', f"Installation error: {str(e)}")
+        return False
+
+def start_application(app_id: str) -> bool:
+    """Start an application"""
+    try:
+        # Get application from database
+        app_doc = applications_col.find_one({'app_id': app_id})
+        if not app_doc:
+            logger.error(f"Application {app_id} not found")
+            return False
         
-        app_dir = get_app_directory(app_id)
-        script_path = os.path.join(app_dir, "main.py")
-        script_content = app['script']
+        # Check if already running
+        if app_id in running_apps and running_apps[app_id].poll() is None:
+            logger.warning(f"Application {app_id} is already running")
+            return True
         
-        for key, value in app.get('env_vars', {}).items():
-            script_content = script_content.replace(f"{{{{{key}}}}}", value)
+        # Install requirements
+        if app_doc.get('requirements'):
+            if not install_requirements(app_id, app_doc['requirements']):
+                save_log(app_id, 'ERROR', "Failed to install requirements")
+                applications_col.update_one(
+                    {'app_id': app_id},
+                    {'$set': {'status': 'crashed'}}
+                )
+                return False
         
+        # Create temporary script file
+        script_path = f"/tmp/{app_id}.py"
         with open(script_path, 'w') as f:
+            script_content = app_doc['script']
+            
+            # Replace environment variable placeholders
+            for key, value in app_doc.get('env_vars', {}).items():
+                script_content = script_content.replace(f"{{{{{key}}}}}", value)
+            
             f.write(script_content)
         
-        log_message(app_id, "INFO", f"Starting {app['app_name']}...")
-        
-        requirements = app.get('requirements', [])
-        if requirements:
-            success, msg = install_requirements(app_id, requirements)
-            if not success:
-                log_message(app_id, "ERROR", f"Failed to install requirements: {msg}")
-                applications_col.update_one(
-                    {"app_id": app_id},
-                    {"$set": {"status": "crashed", "updated_at": datetime.utcnow()}}
-                )
-                return False, msg
-        
+        # Prepare environment
         env = os.environ.copy()
-        env.update(app.get('env_vars', {}))
+        env.update(app_doc.get('env_vars', {}))
+        
+        # Start process
+        save_log(app_id, 'INFO', f"Starting {app_doc['app_name']}...")
         
         process = subprocess.Popen(
-            [sys.executable, "-u", script_path],
+            [sys.executable, script_path],
             stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
-            cwd=app_dir,
+            stderr=subprocess.PIPE,
             env=env,
-            text=True,
             bufsize=1
         )
         
-        running_processes[app_id] = process
+        running_apps[app_id] = process
         app_start_times[app_id] = datetime.utcnow()
         
-        if app_id not in log_queues:
-            log_queues[app_id] = Queue(maxsize=1000)
-        
+        # Start log capture thread
         log_thread = LogCaptureThread(app_id, process)
         log_thread.start()
         log_threads[app_id] = log_thread
         
+        # Create log queue
+        log_queues[app_id] = queue.Queue(maxsize=1000)
+        
+        # Update database
         applications_col.update_one(
-            {"app_id": app_id},
+            {'app_id': app_id},
             {
-                "$set": {
-                    "status": "running",
-                    "pid": process.pid,
-                    "last_started": datetime.utcnow(),
-                    "updated_at": datetime.utcnow()
+                '$set': {
+                    'status': 'running',
+                    'pid': process.pid,
+                    'last_started': datetime.utcnow(),
+                    'updated_at': datetime.utcnow()
                 }
             }
         )
         
-        log_message(app_id, "INFO", f"✓ Application started successfully (PID: {process.pid})")
-        return True, "Application started successfully"
+        save_log(app_id, 'INFO', f"Application started with PID {process.pid}")
+        logger.info(f"Started application {app_id} (PID: {process.pid})")
+        
+        return True
         
     except Exception as e:
-        logger.error(f"Failed to start app {app_id}: {e}")
-        log_message(app_id, "ERROR", f"Failed to start: {str(e)}")
+        logger.error(f"Failed to start application {app_id}: {e}")
+        save_log(app_id, 'ERROR', f"Startup failed: {str(e)}")
         applications_col.update_one(
-            {"app_id": app_id},
-            {"$set": {"status": "crashed", "updated_at": datetime.utcnow()}}
+            {'app_id': app_id},
+            {'$set': {'status': 'crashed'}}
         )
-        return False, str(e)
+        return False
 
-def stop_application(app_id, force=False):
+def stop_application(app_id: str, force: bool = False) -> bool:
+    """Stop an application"""
     try:
-        if app_id not in running_processes:
-            return False, "Application is not running"
+        if app_id not in running_apps:
+            logger.warning(f"Application {app_id} is not running")
+            return True
         
-        process = running_processes[app_id]
-        log_message(app_id, "INFO", "Stopping application...")
+        process = running_apps[app_id]
         
+        # Stop log capture thread
         if app_id in log_threads:
             log_threads[app_id].stop()
+            del log_threads[app_id]
         
-        if not force:
-            process.terminate()
+        save_log(app_id, 'INFO', "Stopping application...")
+        
+        if force or process.poll() is not None:
+            # Force kill
             try:
-                process.wait(timeout=10)
-            except subprocess.TimeoutExpired:
-                log_message(app_id, "WARNING", "Graceful shutdown timeout, forcing kill...")
                 process.kill()
-                process.wait(timeout=5)
+                save_log(app_id, 'INFO', "Application force killed")
+            except:
+                pass
         else:
-            process.kill()
-            process.wait(timeout=5)
+            # Graceful shutdown
+            try:
+                process.terminate()
+                process.wait(timeout=10)
+                save_log(app_id, 'INFO', "Application stopped gracefully")
+            except subprocess.TimeoutExpired:
+                process.kill()
+                save_log(app_id, 'WARNING', "Application force killed after timeout")
         
-        del running_processes[app_id]
+        # Cleanup
+        del running_apps[app_id]
         if app_id in app_start_times:
             del app_start_times[app_id]
         
+        # Update database
         applications_col.update_one(
-            {"app_id": app_id},
-            {"$set": {"status": "stopped", "pid": None, "updated_at": datetime.utcnow()}}
+            {'app_id': app_id},
+            {
+                '$set': {
+                    'status': 'stopped',
+                    'pid': None,
+                    'updated_at': datetime.utcnow()
+                }
+            }
         )
         
-        log_message(app_id, "INFO", "✓ Application stopped")
-        return True, "Application stopped successfully"
+        logger.info(f"Stopped application {app_id}")
+        return True
         
     except Exception as e:
-        logger.error(f"Failed to stop app {app_id}: {e}")
-        return False, str(e)
+        logger.error(f"Failed to stop application {app_id}: {e}")
+        return False
 
-def restart_application(app_id):
-    log_message(app_id, "INFO", "Restarting application...")
+def restart_application(app_id: str) -> bool:
+    """Restart an application"""
+    save_log(app_id, 'INFO', "Restarting application...")
     
-    if app_id in running_processes:
-        stop_application(app_id)
-        time.sleep(2)
+    if stop_application(app_id):
+        time.sleep(2)  # Wait before restart
+        return start_application(app_id)
     
-    applications_col.update_one({"app_id": app_id}, {"$inc": {"restart_count": 1}})
-    return start_application(app_id)
+    return False
 
-def get_app_uptime(app_id):
-    if app_id in app_start_times:
-        delta = datetime.utcnow() - app_start_times[app_id]
-        return int(delta.total_seconds())
-    return 0
-
-# ═══════════════════════════════════════════════════════════════════════
+# ═══════════════════════════════════════════════════════════════════
 # MONITORING THREAD
-# ═══════════════════════════════════════════════════════════════════════
+# ═══════════════════════════════════════════════════════════════════
 
-def monitor_applications():
-    while True:
+def monitoring_loop():
+    """Background thread to monitor applications"""
+    logger.info("Monitoring thread started")
+    
+    while not shutdown_event.is_set():
         try:
-            time.sleep(HEALTH_CHECK_INTERVAL)
-            apps = applications_col.find({"status": "running"})
+            # Get all applications
+            apps = list(applications_col.find())
             
-            for app in apps:
-                app_id = app['app_id']
+            for app_doc in apps:
+                app_id = app_doc['app_id']
                 
-                if app_id in running_processes:
-                    process = running_processes[app_id]
+                # Check if process crashed
+                if app_id in running_apps:
+                    process = running_apps[app_id]
                     
                     if process.poll() is not None:
-                        exit_code = process.returncode
-                        log_message(app_id, "ERROR", f"Application crashed with exit code {exit_code}")
+                        # Process crashed
+                        save_log(app_id, 'ERROR', f"Application crashed with code {process.returncode}")
                         
+                        # Update database
                         applications_col.update_one(
-                            {"app_id": app_id},
-                            {"$set": {"status": "crashed", "updated_at": datetime.utcnow()}}
+                            {'app_id': app_id},
+                            {
+                                '$set': {'status': 'crashed'},
+                                '$inc': {'restart_count': 1}
+                            }
                         )
                         
-                        if app.get('auto_restart', True):
-                            restart_count = app.get('restart_count', 0)
-                            
+                        # Cleanup
+                        del running_apps[app_id]
+                        if app_id in app_start_times:
+                            del app_start_times[app_id]
+                        
+                        # Auto-restart if enabled
+                        if app_doc.get('auto_restart', False):
+                            restart_count = app_doc.get('restart_count', 0)
                             if restart_count < MAX_RESTART_ATTEMPTS:
-                                log_message(app_id, "INFO", f"Auto-restarting... (attempt {restart_count + 1}/{MAX_RESTART_ATTEMPTS})")
-                                time.sleep(5)
-                                restart_application(app_id)
+                                save_log(app_id, 'INFO', f"Auto-restarting (attempt {restart_count + 1}/{MAX_RESTART_ATTEMPTS})")
+                                threading.Thread(target=start_application, args=(app_id,), daemon=True).start()
                             else:
-                                log_message(app_id, "ERROR", f"Max restart attempts reached. Stopping auto-restart.")
-                else:
+                                save_log(app_id, 'ERROR', "Max restart attempts reached")
+                
+                # Update uptime
+                if app_doc.get('status') == 'running':
+                    uptime = get_app_uptime(app_id)
                     applications_col.update_one(
-                        {"app_id": app_id},
-                        {"$set": {"status": "crashed", "updated_at": datetime.utcnow()}}
+                        {'app_id': app_id},
+                        {'$set': {'uptime_seconds': uptime}}
                     )
-                    log_message(app_id, "ERROR", "Process not found. Marked as crashed.")
-                    
+            
+            # Sleep before next check
+            for _ in range(HEALTH_CHECK_INTERVAL):
+                if shutdown_event.is_set():
+                    break
+                time.sleep(1)
+                
         except Exception as e:
-            logger.error(f"Monitor thread error: {e}")
+            logger.error(f"Monitoring error: {e}")
+            time.sleep(5)
+    
+    logger.info("Monitoring thread stopped")
 
-monitor_thread = threading.Thread(target=monitor_applications, daemon=True)
-monitor_thread.start()
-logger.info("✓ Monitoring thread started")
+# ═══════════════════════════════════════════════════════════════════
+# HTML TEMPLATES
+# ═══════════════════════════════════════════════════════════════════
 
-# ═══════════════════════════════════════════════════════════════════════
-# HTML TEMPLATES - Modern UI like Koyeb/Render
-# ═══════════════════════════════════════════════════════════════════════
-
-LOGIN_HTML = """
+LOGIN_TEMPLATE = """
 <!DOCTYPE html>
 <html lang="en">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Sign In - CloudHost Platform</title>
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <title>Login - Hosting Platform</title>
     <style>
         * { margin: 0; padding: 0; box-sizing: border-box; }
         body {
-            font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, sans-serif;
             background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
             min-height: 100vh;
             display: flex;
             align-items: center;
             justify-content: center;
-            padding: 20px;
         }
-        .login-card {
+        .login-container {
             background: white;
-            padding: 48px;
-            border-radius: 20px;
-            box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.25);
-            width: 100%;
-            max-width: 440px;
-        }
-        .logo {
-            text-align: center;
-            margin-bottom: 32px;
-        }
-        .logo-icon {
-            width: 64px;
-            height: 64px;
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            padding: 40px;
             border-radius: 16px;
-            display: inline-flex;
-            align-items: center;
-            justify-content: center;
-            font-size: 32px;
-            margin-bottom: 16px;
+            box-shadow: 0 20px 60px rgba(0,0,0,0.3);
+            width: 100%;
+            max-width: 400px;
         }
         h1 {
+            color: #1f2937;
+            margin-bottom: 30px;
+            text-align: center;
             font-size: 28px;
-            font-weight: 700;
-            color: #1a202c;
-            margin-bottom: 8px;
-            text-align: center;
-        }
-        .subtitle {
-            color: #718096;
-            text-align: center;
-            margin-bottom: 32px;
-            font-size: 15px;
         }
         .form-group {
-            margin-bottom: 24px;
+            margin-bottom: 20px;
         }
         label {
             display: block;
             margin-bottom: 8px;
-            color: #4a5568;
+            color: #4b5563;
             font-weight: 500;
-            font-size: 14px;
         }
         input {
             width: 100%;
-            padding: 14px 16px;
-            border: 2px solid #e2e8f0;
-            border-radius: 10px;
-            font-size: 15px;
-            transition: all 0.2s;
-            font-family: inherit;
+            padding: 12px;
+            border: 2px solid #e5e7eb;
+            border-radius: 8px;
+            font-size: 14px;
+            transition: border-color 0.3s;
         }
         input:focus {
             outline: none;
             border-color: #667eea;
-            box-shadow: 0 0 0 3px rgba(102, 126, 234, 0.1);
         }
-        .btn-primary {
+        button {
             width: 100%;
-            padding: 14px;
+            padding: 12px;
             background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
             color: white;
             border: none;
-            border-radius: 10px;
+            border-radius: 8px;
             font-size: 16px;
             font-weight: 600;
             cursor: pointer;
-            transition: transform 0.2s, box-shadow 0.2s;
+            transition: transform 0.2s;
         }
-        .btn-primary:hover {
+        button:hover {
             transform: translateY(-2px);
-            box-shadow: 0 10px 20px rgba(102, 126, 234, 0.3);
         }
         .error {
-            background: #fed7d7;
-            color: #c53030;
-            padding: 14px 16px;
-            border-radius: 10px;
-            margin-bottom: 24px;
-            font-size: 14px;
-            border-left: 4px solid #c53030;
+            background: #fee;
+            color: #c00;
+            padding: 12px;
+            border-radius: 8px;
+            margin-bottom: 20px;
+            text-align: center;
+        }
+        .logo {
+            text-align: center;
+            margin-bottom: 30px;
+            font-size: 48px;
         }
     </style>
 </head>
 <body>
-    <div class="login-card">
-        <div class="logo">
-            <div class="logo-icon">🚀</div>
-            <h1>CloudHost Platform</h1>
-            <p class="subtitle">Deploy and manage your applications with ease</p>
-        </div>
+    <div class="login-container">
+        <div class="logo">🚀</div>
+        <h1>Hosting Platform</h1>
         {% if error %}
         <div class="error">{{ error }}</div>
         {% endif %}
         <form method="POST">
             <div class="form-group">
-                <label>Username</label>
-                <input type="text" name="username" required autofocus placeholder="Enter your username">
+                <label for="username">Username</label>
+                <input type="text" id="username" name="username" required autofocus>
             </div>
             <div class="form-group">
-                <label>Password</label>
-                <input type="password" name="password" required placeholder="Enter your password">
+                <label for="password">Password</label>
+                <input type="password" id="password" name="password" required>
             </div>
-            <button type="submit" class="btn-primary">Sign In</button>
+            <button type="submit">Login</button>
         </form>
     </div>
 </body>
 </html>
 """
 
-DASHBOARD_HTML = """
+DASHBOARD_TEMPLATE = """
 <!DOCTYPE html>
 <html lang="en">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Dashboard - CloudHost Platform</title>
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <title>Dashboard - Hosting Platform</title>
     <style>
         * { margin: 0; padding: 0; box-sizing: border-box; }
-        
         body {
-            font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
-            background: #f7fafc;
-            color: #2d3748;
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, sans-serif;
+            background: #f3f4f6;
+            color: #1f2937;
         }
-        
-        /* Navbar */
         .navbar {
-            background: white;
-            border-bottom: 1px solid #e2e8f0;
-            padding: 0 32px;
-            height: 64px;
-            display: flex;
-            align-items: center;
-            justify-content: space-between;
-            position: sticky;
-            top: 0;
-            z-index: 100;
-            box-shadow: 0 1px 3px rgba(0,0,0,0.05);
-        }
-        
-        .navbar-brand {
-            display: flex;
-            align-items: center;
-            gap: 12px;
-            font-size: 20px;
-            font-weight: 700;
-            color: #1a202c;
-        }
-        
-        .logo-icon {
-            width: 40px;
-            height: 40px;
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-            border-radius: 10px;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            font-size: 20px;
-        }
-        
-        .nav-actions {
-            display: flex;
-            gap: 12px;
-            align-items: center;
-        }
-        
-        .btn {
-            padding: 10px 20px;
-            border: none;
-            border-radius: 8px;
-            font-weight: 600;
-            cursor: pointer;
-            transition: all 0.2s;
-            font-size: 14px;
-            display: inline-flex;
-            align-items: center;
-            gap: 8px;
-        }
-        
-        .btn-primary {
             background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
             color: white;
+            padding: 16px 24px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
         }
-        
-        .btn-primary:hover {
-            transform: translateY(-1px);
-            box-shadow: 0 4px 12px rgba(102, 126, 234, 0.4);
+        .navbar h1 {
+            font-size: 24px;
+            display: flex;
+            align-items: center;
+            gap: 10px;
         }
-        
-        .btn-secondary {
-            background: #edf2f7;
-            color: #4a5568;
+        .navbar button {
+            background: rgba(255,255,255,0.2);
+            border: none;
+            padding: 8px 16px;
+            border-radius: 6px;
+            color: white;
+            cursor: pointer;
+            transition: background 0.3s;
         }
-        
-        .btn-secondary:hover {
-            background: #e2e8f0;
+        .navbar button:hover {
+            background: rgba(255,255,255,0.3);
         }
-        
-        /* Container */
         .container {
             max-width: 1400px;
             margin: 0 auto;
-            padding: 32px;
+            padding: 24px;
         }
-        
-        /* Stats Grid */
         .stats-grid {
             display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
-            gap: 24px;
-            margin-bottom: 32px;
+            grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+            gap: 20px;
+            margin-bottom: 30px;
         }
-        
         .stat-card {
             background: white;
             padding: 24px;
-            border-radius: 16px;
-            box-shadow: 0 1px 3px rgba(0,0,0,0.05);
-            border: 1px solid #e2e8f0;
-            transition: all 0.2s;
+            border-radius: 12px;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+            transition: transform 0.3s, box-shadow 0.3s;
         }
-        
         .stat-card:hover {
-            box-shadow: 0 4px 12px rgba(0,0,0,0.08);
-            transform: translateY(-2px);
+            transform: translateY(-4px);
+            box-shadow: 0 4px 16px rgba(0,0,0,0.15);
         }
-        
-        .stat-card .label {
-            color: #718096;
-            font-size: 13px;
-            font-weight: 600;
-            text-transform: uppercase;
-            letter-spacing: 0.5px;
+        .stat-card h3 {
+            color: #6b7280;
+            font-size: 14px;
             margin-bottom: 8px;
+            text-transform: uppercase;
         }
-        
         .stat-card .value {
             font-size: 36px;
-            font-weight: 700;
-            color: #1a202c;
+            font-weight: bold;
+            color: #667eea;
         }
-        
-        .stat-card .trend {
-            font-size: 13px;
-            color: #10b981;
-            margin-top: 8px;
+        .apps-section {
+            background: white;
+            border-radius: 12px;
+            padding: 24px;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.1);
         }
-        
-        /* Applications Section */
         .section-header {
             display: flex;
             justify-content: space-between;
             align-items: center;
-            margin-bottom: 24px;
+            margin-bottom: 20px;
         }
-        
-        .section-title {
+        .section-header h2 {
             font-size: 24px;
-            font-weight: 700;
-            color: #1a202c;
         }
-        
-        /* Apps Grid */
-        .apps-grid {
-            display: grid;
-            gap: 20px;
-        }
-        
-        .app-card {
-            background: white;
-            border-radius: 16px;
-            box-shadow: 0 1px 3px rgba(0,0,0,0.05);
-            border: 1px solid #e2e8f0;
-            padding: 24px;
-            transition: all 0.2s;
-        }
-        
-        .app-card:hover {
-            box-shadow: 0 4px 12px rgba(0,0,0,0.08);
-        }
-        
-        .app-header {
-            display: flex;
-            justify-content: space-between;
-            align-items: flex-start;
-            margin-bottom: 16px;
-        }
-        
-        .app-info h3 {
-            font-size: 18px;
+        .btn {
+            padding: 10px 20px;
+            border-radius: 8px;
+            border: none;
             font-weight: 600;
-            color: #1a202c;
-            margin-bottom: 6px;
+            cursor: pointer;
+            transition: all 0.3s;
         }
-        
-        .app-type {
-            font-size: 13px;
-            color: #718096;
-            font-weight: 500;
+        .btn-primary {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
         }
-        
-        .status-badge {
-            padding: 6px 14px;
-            border-radius: 20px;
+        .btn-primary:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 4px 12px rgba(102, 126, 234, 0.4);
+        }
+        .btn-success {
+            background: #10b981;
+            color: white;
+        }
+        .btn-danger {
+            background: #ef4444;
+            color: white;
+        }
+        .btn-warning {
+            background: #f59e0b;
+            color: white;
+        }
+        .btn-small {
+            padding: 6px 12px;
+            font-size: 12px;
+            margin: 0 4px;
+        }
+        table {
+            width: 100%;
+            border-collapse: collapse;
+        }
+        th, td {
+            padding: 12px;
+            text-align: left;
+            border-bottom: 1px solid #e5e7eb;
+        }
+        th {
+            background: #f9fafb;
+            font-weight: 600;
+            color: #4b5563;
+        }
+        .status {
+            padding: 4px 12px;
+            border-radius: 12px;
             font-size: 12px;
             font-weight: 600;
-            text-transform: uppercase;
-            letter-spacing: 0.5px;
+            display: inline-block;
         }
-        
-        .status-badge.running {
+        .status-running {
             background: #d1fae5;
             color: #065f46;
         }
-        
-        .status-badge.stopped {
+        .status-stopped {
             background: #fee;
             color: #991b1b;
         }
-        
-        .status-badge.crashed {
-            background: #fed7aa;
+        .status-crashed {
+            background: #fef3c7;
             color: #92400e;
         }
-        
-        .app-meta {
-            display: grid;
-            grid-template-columns: repeat(3, 1fr);
-            gap: 16px;
-            margin-bottom: 16px;
-            padding-top: 16px;
-            border-top: 1px solid #e2e8f0;
-        }
-        
-        .meta-item {
-            display: flex;
-            flex-direction: column;
-            gap: 4px;
-        }
-        
-        .meta-label {
-            font-size: 12px;
-            color: #718096;
-            font-weight: 500;
-        }
-        
-        .meta-value {
-            font-size: 14px;
-            color: #1a202c;
-            font-weight: 600;
-        }
-        
-        .app-actions {
-            display: flex;
-            gap: 8px;
-            flex-wrap: wrap;
-        }
-        
-        .btn-sm {
-            padding: 8px 16px;
-            font-size: 13px;
-        }
-        
-        .btn-success { background: #10b981; color: white; }
-        .btn-danger { background: #ef4444; color: white; }
-        .btn-warning { background: #f59e0b; color: white; }
-        .btn-info { background: #3b82f6; color: white; }
-        .btn-edit { background: #8b5cf6; color: white; }
-        
-        .btn-success:hover { background: #059669; }
-        .btn-danger:hover { background: #dc2626; }
-        .btn-warning:hover { background: #d97706; }
-        .btn-info:hover { background: #2563eb; }
-        .btn-edit:hover { background: #7c3aed; }
-        
-        /* Modal */
         .modal {
             display: none;
             position: fixed;
@@ -803,198 +728,73 @@ DASHBOARD_HTML = """
             left: 0;
             width: 100%;
             height: 100%;
-            background: rgba(0,0,0,0.6);
+            background: rgba(0,0,0,0.5);
             z-index: 1000;
             align-items: center;
             justify-content: center;
-            backdrop-filter: blur(4px);
         }
-        
-        .modal.active { display: flex; }
-        
+        .modal.active {
+            display: flex;
+        }
         .modal-content {
             background: white;
-            border-radius: 20px;
-            max-width: 900px;
+            border-radius: 12px;
             width: 90%;
+            max-width: 800px;
             max-height: 90vh;
             overflow-y: auto;
-            box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.25);
+            padding: 30px;
         }
-        
-        .modal-header {
-            padding: 32px 32px 24px;
-            border-bottom: 1px solid #e2e8f0;
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-        }
-        
-        .modal-title {
-            font-size: 24px;
-            font-weight: 700;
-            color: #1a202c;
-        }
-        
-        .close-btn {
-            width: 40px;
-            height: 40px;
-            border-radius: 10px;
-            border: none;
-            background: #edf2f7;
-            color: #4a5568;
-            font-size: 20px;
-            cursor: pointer;
-            transition: all 0.2s;
-        }
-        
-        .close-btn:hover {
-            background: #e2e8f0;
-        }
-        
-        .modal-body {
-            padding: 32px;
-        }
-        
-        /* Form */
         .form-group {
-            margin-bottom: 24px;
+            margin-bottom: 20px;
         }
-        
-        .form-label {
+        .form-group label {
             display: block;
             margin-bottom: 8px;
-            color: #4a5568;
             font-weight: 600;
-            font-size: 14px;
+            color: #374151;
         }
-        
-        .form-input,
-        .form-select,
-        .form-textarea {
+        .form-group input,
+        .form-group select,
+        .form-group textarea {
             width: 100%;
-            padding: 12px 16px;
-            border: 2px solid #e2e8f0;
-            border-radius: 10px;
+            padding: 10px;
+            border: 2px solid #e5e7eb;
+            border-radius: 6px;
             font-size: 14px;
-            font-family: inherit;
-            transition: all 0.2s;
         }
-        
-        .form-textarea {
+        .form-group textarea {
+            font-family: 'Courier New', monospace;
             min-height: 200px;
-            font-family: 'Courier New', monospace;
-            resize: vertical;
         }
-        
-        .form-input:focus,
-        .form-select:focus,
-        .form-textarea:focus {
-            outline: none;
-            border-color: #667eea;
-            box-shadow: 0 0 0 3px rgba(102, 126, 234, 0.1);
+        .empty-state {
+            text-align: center;
+            padding: 60px 20px;
+            color: #9ca3af;
         }
-        
-        .checkbox-group {
-            display: flex;
-            align-items: center;
-            gap: 10px;
+        .empty-state-icon {
+            font-size: 64px;
+            margin-bottom: 20px;
         }
-        
-        .checkbox-group input[type="checkbox"] {
-            width: 20px;
-            height: 20px;
-            cursor: pointer;
-        }
-        
-        /* Environment Variables */
-        .env-vars {
-            margin-top: 12px;
-        }
-        
-        .env-var-row {
-            display: grid;
-            grid-template-columns: 1fr 1fr auto;
-            gap: 12px;
-            margin-bottom: 12px;
-        }
-        
-        .btn-add {
-            background: #10b981;
-            color: white;
-            padding: 10px 20px;
-            border: none;
-            border-radius: 8px;
-            font-weight: 600;
-            cursor: pointer;
-            margin-top: 8px;
-        }
-        
-        .btn-remove {
-            background: #ef4444;
-            color: white;
-            padding: 10px 16px;
-            border: none;
-            border-radius: 8px;
-            cursor: pointer;
-        }
-        
-        /* Logs Viewer */
-        .logs-container {
-            background: #1a202c;
-            border-radius: 12px;
-            padding: 20px;
-            max-height: 600px;
-            overflow-y: auto;
-            font-family: 'Courier New', monospace;
-            font-size: 13px;
-        }
-        
-        .log-line {
-            margin-bottom: 6px;
-            line-height: 1.6;
-            white-space: pre-wrap;
-            word-break: break-all;
-        }
-        
-        .log-line .timestamp {
-            color: #a0aec0;
-            margin-right: 8px;
-        }
-        
-        .log-line.info { color: #48bb78; }
-        .log-line.error { color: #f56565; }
-        .log-line.warning { color: #ed8936; }
-        .log-line.debug { color: #cbd5e0; }
-        
-        /* Toast */
         .toast {
             position: fixed;
-            bottom: 24px;
-            right: 24px;
-            background: white;
+            top: 20px;
+            right: 20px;
+            background: #10b981;
+            color: white;
             padding: 16px 24px;
-            border-radius: 12px;
-            box-shadow: 0 10px 25px rgba(0,0,0,0.2);
-            z-index: 2000;
+            border-radius: 8px;
+            box-shadow: 0 4px 12px rgba(0,0,0,0.15);
             display: none;
-            min-width: 300px;
-            border-left: 4px solid;
+            z-index: 2000;
+            animation: slideIn 0.3s ease;
         }
-        
-        .toast.active {
+        .toast.show {
             display: block;
-            animation: slideIn 0.3s ease-out;
         }
-        
-        .toast.success {
-            border-left-color: #10b981;
-        }
-        
         .toast.error {
-            border-left-color: #ef4444;
+            background: #ef4444;
         }
-        
         @keyframes slideIn {
             from {
                 transform: translateX(400px);
@@ -1005,238 +805,157 @@ DASHBOARD_HTML = """
                 opacity: 1;
             }
         }
-        
-        /* Empty State */
-        .empty-state {
-            text-align: center;
-            padding: 60px 20px;
-            color: #718096;
-        }
-        
-        .empty-state-icon {
-            font-size: 64px;
-            margin-bottom: 16px;
-        }
-        
-        .empty-state h3 {
-            font-size: 20px;
-            font-weight: 600;
-            margin-bottom: 8px;
-            color: #4a5568;
-        }
-        
-        .empty-state p {
-            font-size: 14px;
-            margin-bottom: 24px;
-        }
-        
-        /* Loading */
         .loading {
             display: inline-block;
             width: 20px;
             height: 20px;
-            border: 3px solid #e2e8f0;
-            border-top-color: #667eea;
+            border: 3px solid rgba(255,255,255,0.3);
             border-radius: 50%;
-            animation: spin 0.8s linear infinite;
+            border-top-color: white;
+            animation: spin 1s ease-in-out infinite;
         }
-        
         @keyframes spin {
             to { transform: rotate(360deg); }
-        }
-        
-        /* Responsive */
-        @media (max-width: 768px) {
-            .container { padding: 16px; }
-            .stats-grid { grid-template-columns: 1fr; }
-            .app-meta { grid-template-columns: 1fr; }
-            .app-actions { flex-direction: column; }
-            .btn { width: 100%; justify-content: center; }
         }
     </style>
 </head>
 <body>
     <div class="navbar">
-        <div class="navbar-brand">
-            <div class="logo-icon">🚀</div>
-            <span>CloudHost</span>
-        </div>
-        <div class="nav-actions">
-            <button class="btn btn-secondary" onclick="refreshApps()">
-                🔄 Refresh
-            </button>
-            <button class="btn btn-secondary" onclick="logout()">
-                Logout
-            </button>
-        </div>
+        <h1>🚀 Hosting Platform</h1>
+        <button onclick="logout()">Logout</button>
     </div>
     
     <div class="container">
-        <!-- Stats Grid -->
-        <div class="stats-grid" id="statsGrid">
-            <!-- Loaded via JS -->
+        <div class="stats-grid">
+            <div class="stat-card">
+                <h3>Total Apps</h3>
+                <div class="value" id="total-apps">0</div>
+            </div>
+            <div class="stat-card">
+                <h3>Running</h3>
+                <div class="value" style="color: #10b981;" id="running-apps">0</div>
+            </div>
+            <div class="stat-card">
+                <h3>Stopped</h3>
+                <div class="value" style="color: #ef4444;" id="stopped-apps">0</div>
+            </div>
+            <div class="stat-card">
+                <h3>Crashed</h3>
+                <div class="value" style="color: #f59e0b;" id="crashed-apps">0</div>
+            </div>
         </div>
         
-        <!-- Applications Section -->
-        <div class="section-header">
-            <h2 class="section-title">Applications</h2>
-            <button class="btn btn-primary" onclick="openCreateModal()">
-                + New Application
-            </button>
-        </div>
-        
-        <div class="apps-grid" id="appsGrid">
-            <!-- Loaded via JS -->
-        </div>
-    </div>
-    
-    <!-- Create/Edit Modal -->
-    <div class="modal" id="appModal">
-        <div class="modal-content">
-            <div class="modal-header">
-                <h2 class="modal-title" id="modalTitle">Create New Application</h2>
-                <button class="close-btn" onclick="closeModal('appModal')">×</button>
+        <div class="apps-section">
+            <div class="section-header">
+                <h2>Applications</h2>
+                <button class="btn btn-primary" onclick="showCreateModal()">
+                    + New Application
+                </button>
             </div>
-            <div class="modal-body">
-                <form id="appForm">
-                    <input type="hidden" id="editAppId" value="">
-                    
-                    <div class="form-group">
-                        <label class="form-label">Application Name</label>
-                        <input type="text" class="form-input" id="appName" required placeholder="my-awesome-bot">
-                    </div>
-                    
-                    <div class="form-group">
-                        <label class="form-label">Application Type</label>
-                        <select class="form-select" id="appType" onchange="loadTemplate()">
-                            <option value="custom">Custom</option>
-                            <option value="telegram_bot">Telegram Bot (python-telegram-bot)</option>
-                            <option value="telegram_aiogram">Telegram Bot (aiogram)</option>
-                            <option value="flask_api">Flask API</option>
-                            <option value="fastapi">FastAPI</option>
-                            <option value="discord_bot">Discord Bot</option>
-                            <option value="worker">Background Worker</option>
-                        </select>
-                    </div>
-                    
-                    <div class="form-group">
-                        <label class="form-label">Python Script</label>
-                        <textarea class="form-textarea" id="appScript" required placeholder="Enter your Python code here..."></textarea>
-                    </div>
-                    
-                    <div class="form-group">
-                        <label class="form-label">Requirements (one per line)</label>
-                        <textarea class="form-input" id="appRequirements" rows="6" placeholder="python-telegram-bot==20.7
-requests==2.31.0
-flask==3.0.0"></textarea>
-                    </div>
-                    
-                    <div class="form-group">
-                        <label class="form-label">Environment Variables</label>
-                        <div id="envVars" class="env-vars">
-                            <div class="env-var-row">
-                                <input type="text" class="form-input env-key" placeholder="Key (e.g., BOT_TOKEN)">
-                                <input type="text" class="form-input env-value" placeholder="Value">
-                                <button type="button" class="btn-remove" onclick="removeEnvVar(this)">×</button>
-                            </div>
-                        </div>
-                        <button type="button" class="btn-add" onclick="addEnvVar()">+ Add Variable</button>
-                    </div>
-                    
-                    <div class="form-group">
-                        <div class="checkbox-group">
-                            <input type="checkbox" id="autoRestart" checked>
-                            <label class="form-label" for="autoRestart" style="margin: 0;">Auto-restart on crash</label>
-                        </div>
-                    </div>
-                    
-                    <div class="form-group">
-                        <div class="checkbox-group">
-                            <input type="checkbox" id="autoStart" checked>
-                            <label class="form-label" for="autoStart" style="margin: 0;">Auto-start on server boot</label>
-                        </div>
-                    </div>
-                    
-                    <button type="submit" class="btn btn-primary" style="width: 100%;">
-                        <span id="submitBtnText">Create & Deploy</span>
-                    </button>
-                </form>
-            </div>
-        </div>
-    </div>
-    
-    <!-- Logs Modal -->
-    <div class="modal" id="logsModal">
-        <div class="modal-content">
-            <div class="modal-header">
-                <h2 class="modal-title">Application Logs</h2>
-                <button class="close-btn" onclick="closeLogsModal()">×</button>
-            </div>
-            <div class="modal-body">
-                <div class="logs-container" id="logsContainer">
-                    <div style="color: #a0aec0;">Loading logs...</div>
+            
+            <div id="apps-container">
+                <div class="empty-state">
+                    <div class="empty-state-icon">📦</div>
+                    <h3>No applications yet</h3>
+                    <p>Create your first application to get started</p>
                 </div>
             </div>
         </div>
     </div>
     
-    <!-- Toast Notification -->
+    <!-- Create App Modal -->
+    <div class="modal" id="create-modal">
+        <div class="modal-content">
+            <h2>Create New Application</h2>
+            <form onsubmit="createApp(event)">
+                <div class="form-group">
+                    <label>Application Name</label>
+                    <input type="text" name="app_name" required>
+                </div>
+                <div class="form-group">
+                    <label>Application Type</label>
+                    <select name="app_type" onchange="loadTemplate(this.value)">
+                        <option value="">Select type...</option>
+                        <option value="telegram_bot">Telegram Bot</option>
+                        <option value="flask_api">Flask API</option>
+                        <option value="fastapi">FastAPI</option>
+                        <option value="discord_bot">Discord Bot</option>
+                        <option value="worker">Background Worker</option>
+                        <option value="custom">Custom</option>
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label>Python Script</label>
+                    <textarea name="script" id="script-textarea" required placeholder="Enter your Python code here..."></textarea>
+                </div>
+                <div class="form-group">
+                    <label>Requirements (one per line)</label>
+                    <textarea name="requirements" rows="4" placeholder="flask==3.0.0&#10;requests==2.31.0"></textarea>
+                </div>
+                <div class="form-group">
+                    <label>Environment Variables (JSON format)</label>
+                    <textarea name="env_vars" rows="4" placeholder='{"BOT_TOKEN": "your_token_here", "API_KEY": "your_key"}'>{}</textarea>
+                </div>
+                <div class="form-group">
+                    <label>
+                        <input type="checkbox" name="auto_restart" checked> Auto-restart on crash
+                    </label>
+                </div>
+                <div class="form-group">
+                    <label>
+                        <input type="checkbox" name="auto_start" checked> Auto-start on server boot
+                    </label>
+                </div>
+                <div style="display: flex; gap: 10px; justify-content: flex-end;">
+                    <button type="button" class="btn" onclick="closeModal('create-modal')">Cancel</button>
+                    <button type="submit" class="btn btn-primary">Create Application</button>
+                </div>
+            </form>
+        </div>
+    </div>
+    
+    <!-- Logs Modal -->
+    <div class="modal" id="logs-modal">
+        <div class="modal-content" style="max-width: 1200px;">
+            <h2 id="logs-title">Application Logs</h2>
+            <div style="background: #1f2937; color: #f3f4f6; padding: 20px; border-radius: 8px; height: 500px; overflow-y: auto; font-family: 'Courier New', monospace; font-size: 13px;" id="logs-content">
+                Loading logs...
+            </div>
+            <div style="margin-top: 20px; display: flex; gap: 10px; justify-content: flex-end;">
+                <button class="btn btn-danger btn-small" onclick="clearLogs()">Clear Logs</button>
+                <button class="btn" onclick="closeModal('logs-modal')">Close</button>
+            </div>
+        </div>
+    </div>
+    
     <div class="toast" id="toast"></div>
     
     <script>
-        let logsEventSource = null;
-        let currentEditingApp = null;
-        
-        // Application Templates
-        const templates = {
+        const APP_TEMPLATES = {
             telegram_bot: {
                 script: `from telegram import Update
 from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes
+import os
 
-BOT_TOKEN = "{{BOT_TOKEN}}"
+BOT_TOKEN = os.getenv('BOT_TOKEN', '{{BOT_TOKEN}}')
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("Hello! I'm running on CloudHost! 🚀")
+    await update.message.reply_text('Hello! Bot is running on hosting platform!')
 
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("Available commands:\\n/start - Start bot\\n/help - Show help")
+    await update.message.reply_text('Available commands:\\n/start - Start bot\\n/help - Show help')
 
 def main():
     app = ApplicationBuilder().token(BOT_TOKEN).build()
-    app.add_handler(CommandHandler("start", start))
-    app.add_handler(CommandHandler("help", help_command))
-    print("✓ Bot started successfully!")
+    app.add_handler(CommandHandler('start', start))
+    app.add_handler(CommandHandler('help', help_command))
+    print('Bot started successfully!')
     app.run_polling()
 
-if __name__ == "__main__":
+if __name__ == '__main__':
     main()`,
-                requirements: `python-telegram-bot==20.7`
-            },
-            telegram_aiogram: {
-                script: `from aiogram import Bot, Dispatcher, types
-from aiogram.filters import Command
-import asyncio
-
-BOT_TOKEN = "{{BOT_TOKEN}}"
-
-bot = Bot(token=BOT_TOKEN)
-dp = Dispatcher()
-
-@dp.message(Command("start"))
-async def start_command(message: types.Message):
-    await message.answer("Hello! I'm running on CloudHost! 🚀")
-
-@dp.message(Command("help"))
-async def help_command(message: types.Message):
-    await message.answer("Available commands:\\n/start - Start bot\\n/help - Show help")
-
-async def main():
-    print("✓ Bot started successfully!")
-    await dp.start_polling(bot)
-
-if __name__ == "__main__":
-    asyncio.run(main())`,
-                requirements: `aiogram==3.3.0`
+                requirements: 'python-telegram-bot==20.0',
+                env_vars: '{"BOT_TOKEN": "your_bot_token_here"}'
             },
             flask_api: {
                 script: `from flask import Flask, jsonify
@@ -1247,28 +966,27 @@ app = Flask(__name__)
 @app.route('/')
 def home():
     return jsonify({
-        "status": "running",
-        "message": "API is live on CloudHost! 🚀",
-        "version": "1.0.0"
+        'status': 'running',
+        'message': 'API is live!',
+        'version': '1.0.0'
     })
 
 @app.route('/health')
 def health():
-    return jsonify({"status": "healthy"})
+    return jsonify({'status': 'healthy'})
 
 @app.route('/api/data')
-def data():
+def get_data():
     return jsonify({
-        "data": [1, 2, 3, 4, 5],
-        "message": "Sample data endpoint"
+        'data': [1, 2, 3, 4, 5],
+        'count': 5
     })
 
-if __name__ == "__main__":
-    port = int(os.environ.get("PORT", 5000))
-    print(f"✓ Flask API started on port {port}")
-    app.run(host='0.0.0.0', port=port)`,
-                requirements: `flask==3.0.0
-flask-cors==4.0.0`
+if __name__ == '__main__':
+    port = int(os.getenv('PORT', 5000))
+    app.run(host='0.0.0.0', port=port, debug=False)`,
+                requirements: 'flask==3.0.0',
+                env_vars: '{"PORT": "5000"}'
             },
             fastapi: {
                 script: `from fastapi import FastAPI
@@ -1278,29 +996,29 @@ import os
 app = FastAPI(title="My API", version="1.0.0")
 
 @app.get("/")
-def home():
-    return {"status": "running", "message": "FastAPI is live on CloudHost! 🚀"}
+def read_root():
+    return {"status": "running", "message": "FastAPI is live!"}
 
 @app.get("/health")
-def health():
+def health_check():
     return {"status": "healthy"}
 
-@app.get("/api/data")
-def data():
-    return {"data": [1, 2, 3, 4, 5], "message": "Sample data"}
+@app.get("/api/items/{item_id}")
+def read_item(item_id: int):
+    return {"item_id": item_id, "name": f"Item {item_id}"}
 
 if __name__ == "__main__":
-    port = int(os.environ.get("PORT", 8000))
-    print(f"✓ FastAPI started on port {port}")
+    port = int(os.getenv('PORT', 8000))
     uvicorn.run(app, host="0.0.0.0", port=port)`,
-                requirements: `fastapi==0.109.0
-uvicorn==0.27.0`
+                requirements: 'fastapi==0.104.1\\nuvicorn==0.24.0',
+                env_vars: '{"PORT": "8000"}'
             },
             discord_bot: {
                 script: `import discord
 from discord.ext import commands
+import os
 
-BOT_TOKEN = "{{BOT_TOKEN}}"
+BOT_TOKEN = os.getenv('BOT_TOKEN', '{{BOT_TOKEN}}')
 
 intents = discord.Intents.default()
 intents.message_content = True
@@ -1309,130 +1027,113 @@ bot = commands.Bot(command_prefix='!', intents=intents)
 
 @bot.event
 async def on_ready():
-    print(f'✓ {bot.user} connected to Discord!')
+    print(f'Bot logged in as {bot.user}')
 
-@bot.command(name='hello')
+@bot.command()
 async def hello(ctx):
-    await ctx.send('Hello! I am running on CloudHost! 🚀')
+    await ctx.send('Hello! Bot is running on hosting platform!')
 
-@bot.command(name='ping')
+@bot.command()
 async def ping(ctx):
     await ctx.send(f'Pong! Latency: {round(bot.latency * 1000)}ms')
 
 bot.run(BOT_TOKEN)`,
-                requirements: `discord.py==2.3.2`
+                requirements: 'discord.py==2.3.2',
+                env_vars: '{"BOT_TOKEN": "your_discord_token_here"}'
             },
             worker: {
                 script: `import time
-from datetime import datetime
+import os
 
-def worker_task():
-    print("✓ Worker started successfully!")
-    
+def main():
+    print("Worker started!")
     counter = 0
+    
     while True:
         counter += 1
-        print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] Task #{counter} executed")
+        print(f"Worker running... iteration {counter}")
         
-        # Your background task logic here
-        # Example: process queue, send notifications, cleanup, etc.
+        # Your background task here
+        # Example: process queue, check database, send notifications, etc.
         
-        time.sleep(60)  # Run every 60 seconds
+        time.sleep(60)  # Sleep for 60 seconds
 
-if __name__ == "__main__":
-    worker_task()`,
-                requirements: ``
+if __name__ == '__main__':
+    main()`,
+                requirements: '',
+                env_vars: '{}'
             },
             custom: {
-                script: `# Enter your custom Python code here
-import time
-
-print("✓ Application started!")
-
-while True:
-    print("Running...")
-    time.sleep(60)`,
-                requirements: ``
+                script: '# Write your custom Python code here\\nprint("Application started!")\\n\\nwhile True:\\n    pass',
+                requirements: '',
+                env_vars: '{}'
             }
         };
         
-        function loadTemplate() {
-            const type = document.getElementById('appType').value;
-            const template = templates[type];
-            if (template) {
-                document.getElementById('appScript').value = template.script;
-                document.getElementById('appRequirements').value = template.requirements;
+        let currentLogAppId = null;
+        let logEventSource = null;
+        
+        function loadTemplate(type) {
+            if (!type || !APP_TEMPLATES[type]) return;
+            
+            const template = APP_TEMPLATES[type];
+            document.querySelector('[name="script"]').value = template.script;
+            document.querySelector('[name="requirements"]').value = template.requirements;
+            document.querySelector('[name="env_vars"]').value = template.env_vars;
+        }
+        
+        function showToast(message, isError = false) {
+            const toast = document.getElementById('toast');
+            toast.textContent = message;
+            toast.className = 'toast show' + (isError ? ' error' : '');
+            setTimeout(() => toast.className = 'toast', 3000);
+        }
+        
+        function showCreateModal() {
+            document.getElementById('create-modal').classList.add('active');
+        }
+        
+        function closeModal(modalId) {
+            document.getElementById(modalId).classList.remove('active');
+            if (modalId === 'logs-modal' && logEventSource) {
+                logEventSource.close();
+                logEventSource = null;
             }
         }
         
-        function addEnvVar() {
-            const container = document.getElementById('envVars');
-            const row = document.createElement('div');
-            row.className = 'env-var-row';
-            row.innerHTML = `
-                <input type="text" class="form-input env-key" placeholder="Key">
-                <input type="text" class="form-input env-value" placeholder="Value">
-                <button type="button" class="btn-remove" onclick="removeEnvVar(this)">×</button>
-            `;
-            container.appendChild(row);
-        }
-        
-        function removeEnvVar(btn) {
-            btn.parentElement.remove();
-        }
-        
-        function showToast(message, type = 'success') {
-            const toast = document.getElementById('toast');
-            toast.textContent = message;
-            toast.className = `toast ${type} active`;
-            setTimeout(() => toast.classList.remove('active'), 4000);
-        }
-        
-        function formatUptime(seconds) {
-            if (seconds < 60) return `${seconds}s`;
-            if (seconds < 3600) return `${Math.floor(seconds / 60)}m`;
-            if (seconds < 86400) return `${Math.floor(seconds / 3600)}h`;
-            return `${Math.floor(seconds / 86400)}d`;
-        }
-        
-        function formatDate(dateStr) {
-            const date = new Date(dateStr);
-            const now = new Date();
-            const diff = now - date;
-            const days = Math.floor(diff / 86400000);
+        async function createApp(e) {
+            e.preventDefault();
+            const formData = new FormData(e.target);
             
-            if (days === 0) return 'Today';
-            if (days === 1) return 'Yesterday';
-            if (days < 7) return `${days} days ago`;
-            return date.toLocaleDateString();
-        }
-        
-        async function loadStats() {
+            const data = {
+                app_name: formData.get('app_name'),
+                app_type: formData.get('app_type'),
+                script: formData.get('script'),
+                requirements: formData.get('requirements').split('\\n').filter(r => r.trim()),
+                env_vars: JSON.parse(formData.get('env_vars') || '{}'),
+                auto_restart: formData.get('auto_restart') === 'on',
+                auto_start: formData.get('auto_start') === 'on'
+            };
+            
             try {
-                const response = await fetch('/api/stats');
-                const stats = await response.json();
+                const response = await fetch('/api/apps/create', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify(data)
+                });
                 
-                document.getElementById('statsGrid').innerHTML = `
-                    <div class="stat-card">
-                        <div class="label">Total Applications</div>
-                        <div class="value">${stats.total_apps}</div>
-                    </div>
-                    <div class="stat-card">
-                        <div class="label">Running</div>
-                        <div class="value" style="color: #10b981">${stats.running_apps}</div>
-                        <div class="trend">● Active</div>
-                    </div>
-                    <div class="stat-card">
-                        <div class="label">Stopped</div>
-                        <div class="value" style="color: #ef4444">${stats.stopped_apps}</div>
-                    </div>
-                    <div class="stat-card">
-                        <div class="label">Total Logs</div>
-                        <div class="value" style="color: #3b82f6">${stats.total_logs.toLocaleString()}</div>
-                    </div>
-                `;
+                const result = await response.json();
+                
+                if (response.ok) {
+                    showToast('Application created successfully!');
+                    closeModal('create-modal');
+                    e.target.reset();
+                    loadApps();
+                } else {
+                    showToast(result.error || 'Failed to create application', true);
+                }
             } catch (error) {
-                console.error('Failed to load stats:', error);
+                showToast('Network error: ' + error.message, true);
             }
         }
         
@@ -1441,210 +1142,80 @@ while True:
                 const response = await fetch('/api/apps');
                 const apps = await response.json();
                 
-                const grid = document.getElementById('appsGrid');
+                // Update stats
+                document.getElementById('total-apps').textContent = apps.length;
+                document.getElementById('running-apps').textContent = apps.filter(a => a.status === 'running').length;
+                document.getElementById('stopped-apps').textContent = apps.filter(a => a.status === 'stopped').length;
+                document.getElementById('crashed-apps').textContent = apps.filter(a => a.status === 'crashed').length;
+                
+                // Render apps table
+                const container = document.getElementById('apps-container');
                 
                 if (apps.length === 0) {
-                    grid.innerHTML = `
+                    container.innerHTML = `
                         <div class="empty-state">
                             <div class="empty-state-icon">📦</div>
                             <h3>No applications yet</h3>
                             <p>Create your first application to get started</p>
-                            <button class="btn btn-primary" onclick="openCreateModal()">+ New Application</button>
                         </div>
                     `;
                     return;
                 }
                 
-                grid.innerHTML = apps.map(app => `
-                    <div class="app-card">
-                        <div class="app-header">
-                            <div class="app-info">
-                                <h3>${app.app_name}</h3>
-                                <div class="app-type">${app.app_type.replace('_', ' ').toUpperCase()}</div>
-                            </div>
-                            <span class="status-badge ${app.status}">${app.status.toUpperCase()}</span>
-                        </div>
-                        
-                        <div class="app-meta">
-                            <div class="meta-item">
-                                <div class="meta-label">Uptime</div>
-                                <div class="meta-value">${formatUptime(app.uptime_seconds)}</div>
-                            </div>
-                            <div class="meta-item">
-                                <div class="meta-label">Restarts</div>
-                                <div class="meta-value">${app.restart_count || 0}</div>
-                            </div>
-                            <div class="meta-item">
-                                <div class="meta-label">Created</div>
-                                <div class="meta-value">${formatDate(app.created_at)}</div>
-                            </div>
-                        </div>
-                        
-                        <div class="app-actions">
-                            ${app.status !== 'running' ? 
-                                `<button class="btn btn-sm btn-success" onclick="startApp('${app.app_id}')">▶ Start</button>` : 
-                                `<button class="btn btn-sm btn-danger" onclick="stopApp('${app.app_id}')">■ Stop</button>`
-                            }
-                            <button class="btn btn-sm btn-warning" onclick="restartApp('${app.app_id}')">🔄 Restart</button>
-                            <button class="btn btn-sm btn-edit" onclick="editApp('${app.app_id}')">✏️ Edit</button>
-                            <button class="btn btn-sm btn-info" onclick="viewLogs('${app.app_id}')">📄 Logs</button>
-                            <button class="btn btn-sm btn-secondary" onclick="deleteApp('${app.app_id}')">🗑️ Delete</button>
-                        </div>
-                    </div>
-                `).join('');
+                container.innerHTML = `
+                    <table>
+                        <thead>
+                            <tr>
+                                <th>Name</th>
+                                <th>Type</th>
+                                <th>Status</th>
+                                <th>Uptime</th>
+                                <th>Created</th>
+                                <th>Actions</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            ${apps.map(app => `
+                                <tr>
+                                    <td><strong>${app.app_name}</strong></td>
+                                    <td>${app.app_type}</td>
+                                    <td><span class="status status-${app.status}">${app.status.toUpperCase()}</span></td>
+                                    <td>${formatUptime(app.uptime_seconds || 0)}</td>
+                                    <td>${new Date(app.created_at).toLocaleDateString()}</td>
+                                    <td>
+                                        ${app.status === 'running' ? 
+                                            `<button class="btn btn-warning btn-small" onclick="stopApp('${app.app_id}')">Stop</button>` :
+                                            `<button class="btn btn-success btn-small" onclick="startApp('${app.app_id}')">Start</button>`
+                                        }
+                                        <button class="btn btn-small" onclick="restartApp('${app.app_id}')">Restart</button>
+                                        <button class="btn btn-small" onclick="showLogs('${app.app_id}', '${app.app_name}')">Logs</button>
+                                        <button class="btn btn-danger btn-small" onclick="deleteApp('${app.app_id}')">Delete</button>
+                                    </td>
+                                </tr>
+                            `).join('')}
+                        </tbody>
+                    </table>
+                `;
             } catch (error) {
-                console.error('Failed to load apps:', error);
-                showToast('Failed to load applications', 'error');
+                showToast('Failed to load applications', true);
             }
         }
         
-        async function refreshApps() {
-            await loadStats();
-            await loadApps();
-            showToast('Refreshed successfully');
+        function formatUptime(seconds) {
+            if (seconds === 0) return '-';
+            const hours = Math.floor(seconds / 3600);
+            const minutes = Math.floor((seconds % 3600) / 60);
+            return `${hours}h ${minutes}m`;
         }
-        
-        function openCreateModal() {
-            currentEditingApp = null;
-            document.getElementById('modalTitle').textContent = 'Create New Application';
-            document.getElementById('submitBtnText').textContent = 'Create & Deploy';
-            document.getElementById('editAppId').value = '';
-            document.getElementById('appForm').reset();
-            
-            // Reset env vars to one row
-            document.getElementById('envVars').innerHTML = `
-                <div class="env-var-row">
-                    <input type="text" class="form-input env-key" placeholder="Key (e.g., BOT_TOKEN)">
-                    <input type="text" class="form-input env-value" placeholder="Value">
-                    <button type="button" class="btn-remove" onclick="removeEnvVar(this)">×</button>
-                </div>
-            `;
-            
-            document.getElementById('appModal').classList.add('active');
-        }
-        
-        async function editApp(appId) {
-            try {
-                const response = await fetch(`/api/apps/${appId}`);
-                const app = await response.json();
-                
-                currentEditingApp = appId;
-                document.getElementById('modalTitle').textContent = 'Edit Application';
-                document.getElementById('submitBtnText').textContent = 'Update Application';
-                document.getElementById('editAppId').value = appId;
-                
-                document.getElementById('appName').value = app.app_name;
-                document.getElementById('appType').value = app.app_type;
-                document.getElementById('appScript').value = app.script;
-                document.getElementById('appRequirements').value = (app.requirements || []).join('\n');
-                document.getElementById('autoRestart').checked = app.auto_restart;
-                document.getElementById('autoStart').checked = app.auto_start;
-                
-                // Load env vars
-                const envVarsContainer = document.getElementById('envVars');
-                envVarsContainer.innerHTML = '';
-                
-                const envVars = app.env_vars || {};
-                if (Object.keys(envVars).length === 0) {
-                    envVarsContainer.innerHTML = `
-                        <div class="env-var-row">
-                            <input type="text" class="form-input env-key" placeholder="Key">
-                            <input type="text" class="form-input env-value" placeholder="Value">
-                            <button type="button" class="btn-remove" onclick="removeEnvVar(this)">×</button>
-                        </div>
-                    `;
-                } else {
-                    Object.entries(envVars).forEach(([key, value]) => {
-                        const row = document.createElement('div');
-                        row.className = 'env-var-row';
-                        row.innerHTML = `
-                            <input type="text" class="form-input env-key" placeholder="Key" value="${key}">
-                            <input type="text" class="form-input env-value" placeholder="Value" value="${value}">
-                            <button type="button" class="btn-remove" onclick="removeEnvVar(this)">×</button>
-                        `;
-                        envVarsContainer.appendChild(row);
-                    });
-                }
-                
-                document.getElementById('appModal').classList.add('active');
-            } catch (error) {
-                showToast('Failed to load application', 'error');
-            }
-        }
-        
-        function closeModal(id) {
-            document.getElementById(id).classList.remove('active');
-        }
-        
-        document.getElementById('appForm').addEventListener('submit', async (e) => {
-            e.preventDefault();
-            
-            const appId = document.getElementById('editAppId').value;
-            const appName = document.getElementById('appName').value;
-            const appType = document.getElementById('appType').value;
-            const script = document.getElementById('appScript').value;
-            const requirementsText = document.getElementById('appRequirements').value;
-            const autoRestart = document.getElementById('autoRestart').checked;
-            const autoStart = document.getElementById('autoStart').checked;
-            
-            // Collect env vars
-            const envVars = {};
-            document.querySelectorAll('.env-var-row').forEach(row => {
-                const key = row.querySelector('.env-key').value.trim();
-                const value = row.querySelector('.env-value').value.trim();
-                if (key && value) {
-                    envVars[key] = value;
-                }
-            });
-            
-            // Collect requirements
-            const requirements = requirementsText
-                .split('\n')
-                .map(r => r.trim())
-                .filter(r => r);
-            
-            const data = {
-                app_name: appName,
-                app_type: appType,
-                script: script,
-                requirements: requirements,
-                env_vars: envVars,
-                auto_restart: autoRestart,
-                auto_start: autoStart
-            };
-            
-            try {
-                const url = appId ? `/api/apps/${appId}` : '/api/apps/create';
-                const method = appId ? 'PUT' : 'POST';
-                
-                const response = await fetch(url, {
-                    method: method,
-                    headers: {'Content-Type': 'application/json'},
-                    body: JSON.stringify(data)
-                });
-                
-                const result = await response.json();
-                
-                if (response.ok) {
-                    showToast(appId ? 'Application updated!' : 'Application created!');
-                    closeModal('appModal');
-                    refreshApps();
-                } else {
-                    showToast(result.error || 'Operation failed', 'error');
-                }
-            } catch (error) {
-                showToast('Error: ' + error.message, 'error');
-            }
-        });
         
         async function startApp(appId) {
             try {
                 const response = await fetch(`/api/apps/${appId}/start`, {method: 'POST'});
                 const result = await response.json();
-                showToast(result.message || result.error, response.ok ? 'success' : 'error');
-                setTimeout(refreshApps, 1000);
+                showToast(result.message || 'Application started');
+                loadApps();
             } catch (error) {
-                showToast('Error: ' + error.message, 'error');
+                showToast('Failed to start application', true);
             }
         }
         
@@ -1652,77 +1223,95 @@ while True:
             try {
                 const response = await fetch(`/api/apps/${appId}/stop`, {method: 'POST'});
                 const result = await response.json();
-                showToast(result.message || result.error, response.ok ? 'success' : 'error');
-                setTimeout(refreshApps, 1000);
+                showToast(result.message || 'Application stopped');
+                loadApps();
             } catch (error) {
-                showToast('Error: ' + error.message, 'error');
+                showToast('Failed to stop application', true);
             }
         }
         
         async function restartApp(appId) {
             try {
-                showToast('Restarting application...');
                 const response = await fetch(`/api/apps/${appId}/restart`, {method: 'POST'});
                 const result = await response.json();
-                showToast(result.message || result.error, response.ok ? 'success' : 'error');
-                setTimeout(refreshApps, 1000);
+                showToast(result.message || 'Application restarting');
+                loadApps();
             } catch (error) {
-                showToast('Error: ' + error.message, 'error');
+                showToast('Failed to restart application', true);
             }
         }
         
         async function deleteApp(appId) {
-            if (!confirm('Are you sure you want to delete this application? This action cannot be undone.')) return;
+            if (!confirm('Are you sure you want to delete this application? This action cannot be undone.')) {
+                return;
+            }
             
             try {
                 const response = await fetch(`/api/apps/${appId}`, {method: 'DELETE'});
                 const result = await response.json();
-                showToast(result.message || result.error, response.ok ? 'success' : 'error');
-                refreshApps();
+                showToast(result.message || 'Application deleted');
+                loadApps();
             } catch (error) {
-                showToast('Error: ' + error.message, 'error');
+                showToast('Failed to delete application', true);
             }
         }
         
-        function viewLogs(appId) {
-            document.getElementById('logsModal').classList.add('active');
-            document.getElementById('logsContainer').innerHTML = '<div style="color: #a0aec0;">Loading logs...</div>';
+        function showLogs(appId, appName) {
+            currentLogAppId = appId;
+            document.getElementById('logs-title').textContent = `Logs - ${appName}`;
+            document.getElementById('logs-modal').classList.add('active');
+            
+            const logsContent = document.getElementById('logs-content');
+            logsContent.innerHTML = 'Connecting to live logs...';
             
             // Close existing connection
-            if (logsEventSource) {
-                logsEventSource.close();
+            if (logEventSource) {
+                logEventSource.close();
             }
             
-            // Open SSE connection
-            logsEventSource = new EventSource(`/api/apps/${appId}/logs/stream`);
+            // Start SSE connection
+            logEventSource = new EventSource(`/api/apps/${appId}/logs/stream`);
             
-            logsEventSource.onmessage = (event) => {
+            logEventSource.onmessage = function(event) {
                 const log = JSON.parse(event.data);
                 const logLine = document.createElement('div');
-                logLine.className = `log-line ${log.level.toLowerCase()}`;
+                logLine.style.marginBottom = '4px';
                 
-                const timestamp = new Date(log.timestamp).toLocaleTimeString();
-                logLine.innerHTML = `<span class="timestamp">[${timestamp}]</span> [${log.level}] ${log.message}`;
+                const time = new Date(log.timestamp).toLocaleTimeString();
+                const color = log.level === 'ERROR' ? '#ef4444' : 
+                             log.level === 'WARNING' ? '#f59e0b' : 
+                             log.level === 'INFO' ? '#10b981' : '#9ca3af';
                 
-                const container = document.getElementById('logsContainer');
-                if (container.children[0]?.textContent === 'Loading logs...') {
-                    container.innerHTML = '';
+                logLine.innerHTML = `<span style="color: #9ca3af;">${time}</span> <span style="color: ${color};">[${log.level}]</span> ${log.message}`;
+                logsContent.appendChild(logLine);
+                logsContent.scrollTop = logsContent.scrollHeight;
+                
+                // Keep only last 1000 lines
+                while (logsContent.children.length > 1000) {
+                    logsContent.removeChild(logsContent.firstChild);
                 }
-                container.appendChild(logLine);
-                container.scrollTop = container.scrollHeight;
             };
             
-            logsEventSource.onerror = () => {
-                console.error('SSE connection error');
+            logEventSource.onerror = function() {
+                logsContent.innerHTML += '<div style="color: #ef4444;">Connection lost. Reconnecting...</div>';
             };
         }
         
-        function closeLogsModal() {
-            if (logsEventSource) {
-                logsEventSource.close();
-                logsEventSource = null;
+        async function clearLogs() {
+            if (!currentLogAppId) return;
+            
+            if (!confirm('Are you sure you want to clear all logs for this application?')) {
+                return;
             }
-            closeModal('logsModal');
+            
+            try {
+                const response = await fetch(`/api/apps/${currentLogAppId}/logs`, {method: 'DELETE'});
+                const result = await response.json();
+                showToast(result.message || 'Logs cleared');
+                document.getElementById('logs-content').innerHTML = '';
+            } catch (error) {
+                showToast('Failed to clear logs', true);
+            }
         }
         
         function logout() {
@@ -1731,28 +1320,29 @@ while True:
             }
         }
         
-        // Initialize
-        loadStats();
-        loadApps();
+        // Auto-refresh apps every 5 seconds
+        setInterval(loadApps, 5000);
         
-        // Auto-refresh every 30 seconds
-        setInterval(refreshApps, 30000);
+        // Initial load
+        loadApps();
     </script>
 </body>
 </html>
 """
 
-# ═══════════════════════════════════════════════════════════════════════
+# ═══════════════════════════════════════════════════════════════════
 # FLASK ROUTES
-# ═══════════════════════════════════════════════════════════════════════
+# ═══════════════════════════════════════════════════════════════════
 
 @app.route('/')
 @login_required
 def dashboard():
-    return render_template_string(DASHBOARD_HTML)
+    """Main dashboard"""
+    return render_template_string(DASHBOARD_TEMPLATE)
 
 @app.route('/login', methods=['GET', 'POST'])
 def login():
+    """Login page"""
     if request.method == 'POST':
         username = request.form.get('username')
         password = request.form.get('password')
@@ -1761,336 +1351,340 @@ def login():
             session['logged_in'] = True
             return redirect(url_for('dashboard'))
         else:
-            return render_template_string(LOGIN_HTML, error="Invalid credentials")
+            return render_template_string(LOGIN_TEMPLATE, error='Invalid credentials')
     
-    return render_template_string(LOGIN_HTML)
+    return render_template_string(LOGIN_TEMPLATE)
 
 @app.route('/logout')
 def logout():
-    session.pop('logged_in', None)
+    """Logout"""
+    session.clear()
     return redirect(url_for('login'))
 
-# ═══════════════════════════════════════════════════════════════════════
+# ═══════════════════════════════════════════════════════════════════
 # API ROUTES
-# ═══════════════════════════════════════════════════════════════════════
-
-@app.route('/api/stats')
-@login_required
-def api_stats():
-    total_apps = applications_col.count_documents({})
-    running_apps = applications_col.count_documents({"status": "running"})
-    stopped_apps = applications_col.count_documents({"status": {"$in": ["stopped", "crashed"]}})
-    total_logs = logs_col.count_documents({})
-    
-    return jsonify({
-        "total_apps": total_apps,
-        "running_apps": running_apps,
-        "stopped_apps": stopped_apps,
-        "total_logs": total_logs
-    })
-
-@app.route('/api/apps')
-@login_required
-def api_list_apps():
-    apps = list(applications_col.find({}, {"_id": 0}))
-    
-    for app in apps:
-        app['uptime_seconds'] = get_app_uptime(app['app_id']) if app['status'] == 'running' else 0
-        if 'created_at' in app:
-            app['created_at'] = app['created_at'].isoformat()
-        if 'updated_at' in app:
-            app['updated_at'] = app['updated_at'].isoformat()
-        if 'last_started' in app and app['last_started']:
-            app['last_started'] = app['last_started'].isoformat()
-    
-    return jsonify(apps)
+# ═══════════════════════════════════════════════════════════════════
 
 @app.route('/api/apps/create', methods=['POST'])
-@login_required
+@api_auth_required
 def api_create_app():
+    """Create new application"""
     try:
         data = request.json
         
-        if not data.get('app_name') or not data.get('script'):
-            return jsonify({"error": "app_name and script are required"}), 400
+        # Validate required fields
+        required_fields = ['app_name', 'app_type', 'script']
+        for field in required_fields:
+            if field not in data:
+                return jsonify({'error': f'Missing required field: {field}'}), 400
         
-        is_valid, msg = validate_python_code(data['script'])
-        if not is_valid:
-            return jsonify({"error": msg}), 400
+        # Check app limit
+        app_count = applications_col.count_documents({})
+        if app_count >= MAX_APPS:
+            return jsonify({'error': f'Maximum {MAX_APPS} applications allowed'}), 400
         
-        app_id = str(uuid.uuid4())[:8]
+        # Generate app ID
+        app_id = generate_app_id()
         
+        # Create application document
         app_doc = {
-            "app_id": app_id,
-            "app_name": data['app_name'],
-            "app_type": data.get('app_type', 'custom'),
-            "script": data['script'],
-            "requirements": data.get('requirements', []),
-            "env_vars": data.get('env_vars', {}),
-            "auto_restart": data.get('auto_restart', True),
-            "auto_start": data.get('auto_start', False),
-            "status": "stopped",
-            "created_at": datetime.utcnow(),
-            "updated_at": datetime.utcnow(),
-            "last_started": None,
-            "uptime_seconds": 0,
-            "restart_count": 0,
-            "pid": None
+            'app_id': app_id,
+            'app_name': data['app_name'],
+            'app_type': data['app_type'],
+            'script': data['script'],
+            'requirements': data.get('requirements', []),
+            'env_vars': data.get('env_vars', {}),
+            'auto_restart': data.get('auto_restart', True),
+            'auto_start': data.get('auto_start', True),
+            'status': 'stopped',
+            'created_at': datetime.utcnow(),
+            'updated_at': datetime.utcnow(),
+            'last_started': None,
+            'uptime_seconds': 0,
+            'restart_count': 0,
+            'pid': None
         }
         
+        # Save to database
         applications_col.insert_one(app_doc)
-        log_queues[app_id] = Queue(maxsize=1000)
         
-        logger.info(f"Created application: {app_id} - {data['app_name']}")
+        save_log(app_id, 'INFO', f"Application '{data['app_name']}' created")
+        
+        # Auto-start if enabled
+        if app_doc['auto_start']:
+            threading.Thread(target=start_application, args=(app_id,), daemon=True).start()
         
         return jsonify({
-            "message": "Application created successfully",
-            "app_id": app_id
-        })
+            'message': 'Application created successfully',
+            'app_id': app_id
+        }), 201
         
     except Exception as e:
-        logger.error(f"Failed to create app: {e}")
-        return jsonify({"error": str(e)}), 500
+        logger.error(f"Failed to create application: {e}")
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/apps', methods=['GET'])
+@api_auth_required
+def api_list_apps():
+    """List all applications"""
+    try:
+        apps = list(applications_col.find({}, {'_id': 0}).sort('created_at', DESCENDING))
+        
+        # Update real-time status and uptime
+        for app in apps:
+            app['status'] = get_app_status(app['app_id'])
+            app['uptime_seconds'] = get_app_uptime(app['app_id'])
+        
+        return jsonify(apps), 200
+    except Exception as e:
+        logger.error(f"Failed to list applications: {e}")
+        return jsonify({'error': str(e)}), 500
 
 @app.route('/api/apps/<app_id>', methods=['GET'])
-@login_required
+@api_auth_required
 def api_get_app(app_id):
-    app = applications_col.find_one({"app_id": app_id}, {"_id": 0})
-    if not app:
-        return jsonify({"error": "Application not found"}), 404
-    
-    if 'created_at' in app:
-        app['created_at'] = app['created_at'].isoformat()
-    if 'updated_at' in app:
-        app['updated_at'] = app['updated_at'].isoformat()
-    if 'last_started' in app and app['last_started']:
-        app['last_started'] = app['last_started'].isoformat()
-    
-    app['uptime_seconds'] = get_app_uptime(app_id) if app['status'] == 'running' else 0
-    
-    return jsonify(app)
-
-@app.route('/api/apps/<app_id>', methods=['PUT'])
-@login_required
-def api_update_app(app_id):
+    """Get application details"""
     try:
-        data = request.json
-        
-        app = applications_col.find_one({"app_id": app_id})
+        app = applications_col.find_one({'app_id': app_id}, {'_id': 0})
         if not app:
-            return jsonify({"error": "Application not found"}), 404
+            return jsonify({'error': 'Application not found'}), 404
         
-        # Validate script if provided
-        if 'script' in data:
-            is_valid, msg = validate_python_code(data['script'])
-            if not is_valid:
-                return jsonify({"error": msg}), 400
+        app['status'] = get_app_status(app_id)
+        app['uptime_seconds'] = get_app_uptime(app_id)
         
-        # Prepare update data
-        update_data = {
-            "updated_at": datetime.utcnow()
-        }
-        
-        if 'app_name' in data:
-            update_data['app_name'] = data['app_name']
-        if 'app_type' in data:
-            update_data['app_type'] = data['app_type']
-        if 'script' in data:
-            update_data['script'] = data['script']
-        if 'requirements' in data:
-            update_data['requirements'] = data['requirements']
-        if 'env_vars' in data:
-            update_data['env_vars'] = data['env_vars']
-        if 'auto_restart' in data:
-            update_data['auto_restart'] = data['auto_restart']
-        if 'auto_start' in data:
-            update_data['auto_start'] = data['auto_start']
-        
-        applications_col.update_one(
-            {"app_id": app_id},
-            {"$set": update_data}
-        )
-        
-        logger.info(f"Updated application: {app_id}")
-        
-        # If app is running, suggest restart
-        if app['status'] == 'running':
-            return jsonify({
-                "message": "Application updated successfully. Restart for changes to take effect.",
-                "needs_restart": True
-            })
-        
-        return jsonify({"message": "Application updated successfully"})
-        
+        return jsonify(app), 200
     except Exception as e:
-        logger.error(f"Failed to update app {app_id}: {e}")
-        return jsonify({"error": str(e)}), 500
+        logger.error(f"Failed to get application: {e}")
+        return jsonify({'error': str(e)}), 500
 
 @app.route('/api/apps/<app_id>', methods=['DELETE'])
-@login_required
+@api_auth_required
 def api_delete_app(app_id):
+    """Delete application"""
     try:
-        if app_id in running_processes:
+        # Check if exists
+        app = applications_col.find_one({'app_id': app_id})
+        if not app:
+            return jsonify({'error': 'Application not found'}), 404
+        
+        # Stop if running
+        if get_app_status(app_id) == 'running':
             stop_application(app_id, force=True)
         
-        result = applications_col.delete_one({"app_id": app_id})
-        if result.deleted_count == 0:
-            return jsonify({"error": "Application not found"}), 404
+        # Delete from database
+        applications_col.delete_one({'app_id': app_id})
+        logs_col.delete_many({'app_id': app_id})
+        storage_col.delete_many({'app_id': app_id})
         
-        logs_col.delete_many({"app_id": app_id})
-        
-        import shutil
-        app_dir = get_app_directory(app_id)
-        if os.path.exists(app_dir):
-            shutil.rmtree(app_dir)
-        
+        # Cleanup
         if app_id in log_queues:
             del log_queues[app_id]
         
-        logger.info(f"Deleted application: {app_id}")
+        logger.info(f"Deleted application {app_id}")
         
-        return jsonify({"message": "Application deleted successfully"})
-        
+        return jsonify({'message': 'Application deleted successfully'}), 200
     except Exception as e:
-        logger.error(f"Failed to delete app {app_id}: {e}")
-        return jsonify({"error": str(e)}), 500
+        logger.error(f"Failed to delete application: {e}")
+        return jsonify({'error': str(e)}), 500
 
 @app.route('/api/apps/<app_id>/start', methods=['POST'])
-@login_required
+@api_auth_required
 def api_start_app(app_id):
-    success, message = start_application(app_id)
-    if success:
-        return jsonify({"message": message})
-    else:
-        return jsonify({"error": message}), 500
+    """Start application"""
+    try:
+        app = applications_col.find_one({'app_id': app_id})
+        if not app:
+            return jsonify({'error': 'Application not found'}), 404
+        
+        # Start in background thread
+        success = start_application(app_id)
+        
+        if success:
+            return jsonify({'message': 'Application started successfully'}), 200
+        else:
+            return jsonify({'error': 'Failed to start application'}), 500
+    except Exception as e:
+        logger.error(f"Failed to start application: {e}")
+        return jsonify({'error': str(e)}), 500
 
 @app.route('/api/apps/<app_id>/stop', methods=['POST'])
-@login_required
+@api_auth_required
 def api_stop_app(app_id):
-    success, message = stop_application(app_id)
-    if success:
-        return jsonify({"message": message})
-    else:
-        return jsonify({"error": message}), 500
+    """Stop application"""
+    try:
+        success = stop_application(app_id)
+        
+        if success:
+            return jsonify({'message': 'Application stopped successfully'}), 200
+        else:
+            return jsonify({'error': 'Failed to stop application'}), 500
+    except Exception as e:
+        logger.error(f"Failed to stop application: {e}")
+        return jsonify({'error': str(e)}), 500
 
 @app.route('/api/apps/<app_id>/restart', methods=['POST'])
-@login_required
+@api_auth_required
 def api_restart_app(app_id):
-    success, message = restart_application(app_id)
-    if success:
-        return jsonify({"message": message})
-    else:
-        return jsonify({"error": message}), 500
-
-@app.route('/api/apps/<app_id>/logs')
-@login_required
-def api_get_logs(app_id):
+    """Restart application"""
     try:
-        limit = int(request.args.get('limit', 100))
-        logs = list(logs_col.find(
-            {"app_id": app_id},
-            {"_id": 0}
-        ).sort("timestamp", -1).limit(limit))
+        success = restart_application(app_id)
         
-        for log in logs:
-            log['timestamp'] = log['timestamp'].isoformat()
-        
-        logs.reverse()
-        return jsonify(logs)
-        
+        if success:
+            return jsonify({'message': 'Application restarted successfully'}), 200
+        else:
+            return jsonify({'error': 'Failed to restart application'}), 500
     except Exception as e:
-        return jsonify({"error": str(e)}), 500
+        logger.error(f"Failed to restart application: {e}")
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/apps/<app_id>/logs', methods=['GET'])
+@api_auth_required
+def api_get_logs(app_id):
+    """Get application logs"""
+    try:
+        limit = int(request.args.get('limit', 1000))
+        
+        logs = list(logs_col.find(
+            {'app_id': app_id},
+            {'_id': 0}
+        ).sort('timestamp', DESCENDING).limit(limit))
+        
+        logs.reverse()  # Show oldest first
+        
+        return jsonify(logs), 200
+    except Exception as e:
+        logger.error(f"Failed to get logs: {e}")
+        return jsonify({'error': str(e)}), 500
 
 @app.route('/api/apps/<app_id>/logs/stream')
+@api_auth_required
 def api_stream_logs(app_id):
-    """Server-Sent Events for live log streaming"""
-    
+    """Stream logs using Server-Sent Events"""
     def generate():
-        # Send initial logs
-        logs = list(logs_col.find(
-            {"app_id": app_id},
-            {"_id": 0}
-        ).sort("timestamp", -1).limit(100))
-        
-        for log in reversed(logs):
-            log['timestamp'] = log['timestamp'].isoformat()
-            yield f"data: {json.dumps(log)}\n\n"
-        
-        # Stream new logs
+        # Create queue if doesn't exist
         if app_id not in log_queues:
-            log_queues[app_id] = Queue(maxsize=1000)
+            log_queues[app_id] = queue.Queue(maxsize=1000)
         
-        queue = log_queues[app_id]
+        log_queue = log_queues[app_id]
         
-        while True:
-            try:
-                log = queue.get(timeout=30)
+        # Send existing logs first
+        try:
+            logs = list(logs_col.find(
+                {'app_id': app_id},
+                {'_id': 0}
+            ).sort('timestamp', DESCENDING).limit(100))
+            
+            for log in reversed(logs):
                 log['timestamp'] = log['timestamp'].isoformat()
                 yield f"data: {json.dumps(log)}\n\n"
-            except Empty:
+        except:
+            pass
+        
+        # Stream new logs
+        while True:
+            try:
+                log = log_queue.get(timeout=30)
+                log['timestamp'] = log['timestamp'].isoformat()
+                yield f"data: {json.dumps(log)}\n\n"
+            except queue.Empty:
+                # Send heartbeat
                 yield f": heartbeat\n\n"
-            except GeneratorExit:
+            except:
                 break
     
     return Response(generate(), mimetype='text/event-stream')
 
-# ═══════════════════════════════════════════════════════════════════════
-# STARTUP & SHUTDOWN
-# ═══════════════════════════════════════════════════════════════════════
+@app.route('/api/apps/<app_id>/logs', methods=['DELETE'])
+@api_auth_required
+def api_clear_logs(app_id):
+    """Clear application logs"""
+    try:
+        result = logs_col.delete_many({'app_id': app_id})
+        return jsonify({
+            'message': f'Deleted {result.deleted_count} log entries'
+        }), 200
+    except Exception as e:
+        logger.error(f"Failed to clear logs: {e}")
+        return jsonify({'error': str(e)}), 500
 
-def startup():
+# ═══════════════════════════════════════════════════════════════════
+# STARTUP & SHUTDOWN HANDLERS
+# ═══════════════════════════════════════════════════════════════════
+
+def startup_platform():
     """Initialize platform on startup"""
     logger.info("=" * 70)
-    logger.info("🚀 Starting CloudHost Platform")
+    logger.info("STARTING HOSTING PLATFORM")
     logger.info("=" * 70)
     
-    apps = applications_col.find({})
-    app_count = 0
+    # Start monitoring thread
+    monitoring_thread = threading.Thread(target=monitoring_loop, daemon=True)
+    monitoring_thread.start()
+    logger.info("Monitoring thread started")
     
-    for app in apps:
-        app_id = app['app_id']
-        log_queues[app_id] = Queue(maxsize=1000)
-        app_count += 1
+    # Auto-start applications
+    try:
+        apps = list(applications_col.find({'auto_start': True}))
+        logger.info(f"Found {len(apps)} applications with auto-start enabled")
         
-        if app.get('auto_start', False) and app.get('status') != 'running':
-            logger.info(f"Auto-starting: {app['app_name']}")
-            start_application(app_id)
+        for app in apps:
+            app_id = app['app_id']
+            logger.info(f"Auto-starting {app['app_name']} ({app_id})")
+            threading.Thread(target=start_application, args=(app_id,), daemon=True).start()
+            time.sleep(1)  # Stagger starts
+    except Exception as e:
+        logger.error(f"Error during auto-start: {e}")
     
-    logger.info(f"✓ Loaded {app_count} applications")
-    logger.info("✓ Platform started successfully")
+    logger.info("=" * 70)
+    logger.info("PLATFORM STARTED SUCCESSFULLY")
+    logger.info(f"Admin URL: http://localhost:{PORT}")
+    logger.info(f"Username: {ADMIN_USERNAME}")
     logger.info("=" * 70)
 
-def shutdown():
-    """Gracefully shutdown platform"""
-    logger.info("Shutting down platform...")
+def shutdown_platform():
+    """Cleanup on shutdown"""
+    logger.info("=" * 70)
+    logger.info("SHUTTING DOWN PLATFORM")
+    logger.info("=" * 70)
     
-    for app_id in list(running_processes.keys()):
-        stop_application(app_id)
+    # Signal monitoring thread to stop
+    shutdown_event.set()
     
+    # Stop all running applications
+    app_ids = list(running_apps.keys())
+    for app_id in app_ids:
+        logger.info(f"Stopping application {app_id}")
+        stop_application(app_id, force=False)
+    
+    # Close MongoDB connection
     mongo_client.close()
-    logger.info("✓ Platform shutdown complete")
+    
+    logger.info("PLATFORM SHUTDOWN COMPLETE")
+    logger.info("=" * 70)
 
+# Handle signals
 def signal_handler(sig, frame):
-    """Handle shutdown signals"""
-    logger.info(f"Received signal {sig}")
-    shutdown()
+    """Handle interrupt signals"""
+    shutdown_platform()
     sys.exit(0)
 
 signal.signal(signal.SIGINT, signal_handler)
 signal.signal(signal.SIGTERM, signal_handler)
 
-# ═══════════════════════════════════════════════════════════════════════
+# ═══════════════════════════════════════════════════════════════════
 # MAIN ENTRY POINT
-# ═══════════════════════════════════════════════════════════════════════
+# ═══════════════════════════════════════════════════════════════════
 
-if __name__ == "__main__":
-    startup()
+if __name__ == '__main__':
+    PORT = int(os.getenv('PORT', 5000))
     
-    port = int(os.environ.get("PORT", 5000))
+    # Run startup tasks
+    startup_platform()
     
+    # Start Flask app
     app.run(
         host='0.0.0.0',
-        port=port,
+        port=PORT,
         debug=False,
         threaded=True
     )
